@@ -134,6 +134,14 @@ While the API is young, install from git, pinned to a tag:
 pnpm add github:MamkinCoder/webtap#v0.1.0
 ```
 
+The package builds itself on install (its `prepare` script). pnpm 10 blocks dependency build scripts by default, so
+allow it in `pnpm-workspace.yaml` first:
+
+```yaml
+onlyBuiltDependencies:
+  - "@mamkincoder/webtap"
+```
+
 Requires Node ≥ 22.19 and a local Chrome or Chromium (`browser.executablePath`) for `pageFetch` and `browser`
 strategies.
 
