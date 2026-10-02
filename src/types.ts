@@ -10,7 +10,7 @@ export interface ProxyConfig {
 }
 
 export interface BrowserOptions {
-  /** Chrome / Chromium binary. Omitted: Stagehand looks for a local Chrome. */
+  /** Chrome / Chromium binary. Omitted: the usual install locations (findChrome()), then Stagehand's own lookup. */
   executablePath?: string;
   headless: boolean;
   /** Persistent profile dir, so cookies and solved challenges survive restarts. Also used to find the process tree. */

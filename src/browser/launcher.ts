@@ -64,6 +64,24 @@ export function ensureDisplay(): Promise<boolean> {
   return xvfbStarted;
 }
 
+const CHROME_CANDIDATES: Record<string, string[]> = {
+  darwin: [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  ],
+  linux: ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"],
+  win32: [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  ],
+};
+
+/** The first installed Chrome / Chromium in the usual places. Needed up front: the desktop user agent is derived from
+ * the binary's version, and without it headless Chrome says "HeadlessChrome" (anti-bot checks reject it). */
+export function findChrome(): string | undefined {
+  return (CHROME_CANDIDATES[process.platform] ?? []).find((p) => existsSync(p));
+}
+
 const desktopUA = new Map<string, string>();
 /** The desktop user agent of this Chromium build, in Chrome's reduced form: headless says "HeadlessChrome" (a bot
  * tell sites read). Set as a launch flag, so navigator.userAgentData keeps the browser's own client hints. */
@@ -99,10 +117,11 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
       cleanup.push(() => rm(diskCacheDir, { recursive: true, force: true }));
       const viewport = opts.viewport ?? DEFAULT_VIEWPORT;
       const languages = opts.languages?.length ? opts.languages : DEFAULT_LANGUAGES;
-      const ua = opts.userAgent || desktopUserAgent(opts.executablePath);
+      const executablePath = opts.executablePath || findChrome();
+      const ua = opts.userAgent || desktopUserAgent(executablePath);
 
       const browser = await localBrowser.launch({
-        ...(opts.executablePath ? { executablePath: opts.executablePath } : {}),
+        ...(executablePath ? { executablePath } : {}),
         userDataDir: opts.userDataDir,
         preserveUserDataDir: true,
         // Headful needs a screen: a virtual one on a bare Linux box, else headless.
