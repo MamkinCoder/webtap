@@ -64,8 +64,7 @@ and restarts. `browser.maxSessions` caps concurrent Chromium processes; idle ses
 ## Defining a site
 
 ```ts
-import { z } from "zod";
-import { defineSite, endpoint, http, pageFetch } from "@mamkincoder/webtap";
+import { defineSite, endpoint, http, pageFetch, z } from "@mamkincoder/webtap"; // webtap's own zod 4
 
 export const flowers = defineSite({
   id: "flowers",

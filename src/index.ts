@@ -1,4 +1,7 @@
 // Public surface.
+// webtap ships its own zod 4; define site schemas with this `z` so they match the runtime's types, whatever zod
+// version the host app uses.
+export { z } from "zod";
 export { createWebtap, defaultCanaryCheck, WebtapError } from "./runtime/webtap.js";
 export type { Attempt, CallResult, EndpointInfo, HealthReport, Webtap, WebtapErrorCode, WebtapEvent, WebtapOptions } from "./runtime/webtap.js";
 export { defineSite, endpoint } from "./runtime/site.js";
