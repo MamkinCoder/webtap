@@ -1,0 +1,56 @@
+{
+  "name": "@mamkincoder/webtap",
+  "version": "0.1.0",
+  "description": "Turn any website into an API: an LLM maps it once with Stagehand, a self-healing action cache replays it without the LLM.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MamkinCoder/webtap.git"
+  },
+  "keywords": [
+    "stagehand",
+    "scraping",
+    "browser-automation",
+    "chromium",
+    "llm",
+    "self-healing",
+    "cdp"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepare": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@browserbasehq/stagehand": "^4.1.0",
+    "undici": "^8.11.2"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "zod": "^4.0.0"
+  }
+}
