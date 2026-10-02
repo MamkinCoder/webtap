@@ -61,17 +61,23 @@ export class IdentityPool {
   }
 
   /**
-   * Reserves the identity with the earliest free slot for this site and waits for it. null when every candidate is
+   * Reserves an identity for this site and waits for its slot: the first one (in list order) that is free now, so
+   * earlier identities are primaries and later ones take the overflow; when none is free, the one free soonest. null when every candidate is
    * quarantined or the wait would exceed maxWaitMs (the caller reports "rate limited" / "all identities banned").
    */
   async acquire(siteId: string, o: AcquireOptions): Promise<Identity | null> {
     const t = this.now();
+    // The first identity in list order that is free right now (a primary with spill-over), else the one free soonest.
     let best: { identity: Identity; slot: SlotState } | undefined;
     for (const identity of this.identities) {
       if (o.exclude?.has(identity.id)) continue;
       if (o.proxyOnly && !identity.proxy) continue;
       const slot = this.slot(identity.id, siteId);
       if (slot.quarantinedUntil > t) continue;
+      if (slot.nextAt <= t) {
+        best = { identity, slot };
+        break;
+      }
       if (!best || slot.nextAt < best.slot.nextAt) best = { identity, slot };
     }
     if (!best) return null;

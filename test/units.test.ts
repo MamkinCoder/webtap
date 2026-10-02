@@ -20,6 +20,19 @@ describe("IdentityPool", () => {
     expect((await pool.acquire("wb", o))?.id).toBe("a");
   });
 
+  it("prefers earlier identities while they are free, spilling to later ones", async () => {
+    let now = 0;
+    const pool = new IdentityPool([{ id: "server" }, { id: "mobile" }], () => now, () => 0.5);
+    const o = { minIntervalMs: 1_000, maxWaitMs: 5_000 };
+    expect((await pool.acquire("avito", o))?.id).toBe("server");
+    expect((await pool.acquire("avito", o))?.id).toBe("mobile"); // server busy for 1 s
+    now = 1_000;
+    expect((await pool.acquire("avito", o))?.id).toBe("server"); // free again: back to the primary
+    pool.report("avito", "server", "banned", 60_000);
+    now = 3_000;
+    expect((await pool.acquire("avito", o))?.id).toBe("mobile"); // primary quarantined
+  });
+
   it("restricts proxy-only sites to proxy identities", async () => {
     const pool = new IdentityPool([{ id: "direct" }, { id: "mobile", proxy: { server: "http://p:1" } }], () => 0);
     expect((await pool.acquire("avito", { minIntervalMs: 0, maxWaitMs: 0, proxyOnly: true }))?.id).toBe("mobile");
