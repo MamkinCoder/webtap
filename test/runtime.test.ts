@@ -87,6 +87,32 @@ describe("fallback and outcomes", () => {
     await wt.close();
   });
 
+  it("retries a transient error once on the same identity when it is the only one", async () => {
+    let runs = 0;
+    const wt = createWebtap({
+      launcher: noBrowser,
+      sites: [
+        siteWith([
+          fake("api", () => {
+            if (++runs === 1) throw new Error("socket hang up");
+            return { items: ["ok"] };
+          }),
+        ]),
+      ],
+    });
+    const r = await wt.call("shop", "search", { q: "x" });
+    expect(r.attempts.map((a) => `${a.identity}:${a.outcome}`)).toEqual(["direct:error", "direct:ok"]);
+    await wt.close();
+  });
+
+  it("does not retry a ban on the same identity", async () => {
+    let runs = 0;
+    const wt = createWebtap({ launcher: noBrowser, sites: [siteWith([fake("api", () => ((runs++, Promise.reject(banned("498")))))])] });
+    await wt.call("shop", "search", { q: "x" }).catch(() => undefined);
+    expect(runs).toBe(1);
+    await wt.close();
+  });
+
   it("fails with every attempt listed when all identities are banned", async () => {
     const wt = createWebtap({
       launcher: noBrowser,

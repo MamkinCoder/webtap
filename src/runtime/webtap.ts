@@ -5,7 +5,7 @@
 //     ok      → done
 //     banned  → quarantine that identity for this site, retry the same strategy on another identity
 //     changed → next strategy (the recipe, not the identity, is the problem)
-//     error   → retry once on another identity, then next strategy
+//     error   → retry once (on another identity when there is one), then next strategy
 // changed/error feed the per-strategy circuit breaker; everything feeds health().
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
@@ -37,7 +37,7 @@ export interface WebtapOptions {
     maxSessions?: number;
     idleMs?: number;
   };
-  /** Identities tried per strategy before moving on. Default 3. */
+  /** Attempts per strategy (identities tried, plus one same-identity retry of a transient error). Default 3. */
   maxIdentityAttempts?: number;
   /** Longest wait for a rate-limit slot before an identity counts as unavailable. Default 15000. */
   maxWaitMs?: number;
@@ -281,7 +281,10 @@ export function createWebtap(opts: WebtapOptions): Webtap {
             breaker.failure(bkey);
             break;
           }
-          // banned (or a first error): same strategy, next identity
+          // A first transient error may retry on the same identity (after its rate-limit gap) when it is the only one
+          // left; a ban never does.
+          if (outcome === "error" && identities.identities.every((x) => tried.has(x.id))) tried.delete(identity.id);
+          // banned (or a first error): same strategy, another identity when there is one
         }
       }
       return undefined;
