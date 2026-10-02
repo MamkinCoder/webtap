@@ -120,17 +120,22 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
       const executablePath = opts.executablePath || findChrome();
       const ua = opts.userAgent || desktopUserAgent(executablePath);
 
+      const headless = opts.headless || !(await ensureDisplay());
+      // A headful window on a real desktop goes off-screen unless asked to be visible (Xvfb has no one to bother).
+      const offscreen = !headless && !opts.visible && process.platform !== "linux" ? ["--window-position=-32000,-32000"] : [];
+
       const browser = await localBrowser.launch({
         ...(executablePath ? { executablePath } : {}),
         userDataDir: opts.userDataDir,
         preserveUserDataDir: true,
         // Headful needs a screen: a virtual one on a bare Linux box, else headless.
-        headless: opts.headless || !(await ensureDisplay()),
+        headless,
         ignoreDefaultArgs: ["--enable-automation"],
         ...(opts.proxy ? { proxy: opts.proxy } : {}),
         locale: languages[0],
         args: [
           ...CHROMIUM_ARGS,
+          ...offscreen,
           // A proxy-less identity browses direct: Linux Chromium would otherwise honour HTTP(S)_PROXY from the env.
           ...(opts.proxy ? [] : ["--no-proxy-server"]),
           `--lang=${languages[0]}`,

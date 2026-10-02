@@ -59,6 +59,10 @@ createWebtap({
 });
 ```
 
+Some sites block headless Chrome outright (Avito answers 429 to it while a normal window passes): give them
+`browser: { headless: false }`. Headful windows open off-screen on a desktop and on a virtual display (Xvfb) on a
+Linux server.
+
 Each (identity, site) pair keeps a warm Chromium with a persistent profile, so solved challenges survive between calls
 and restarts. `browser.maxSessions` caps concurrent Chromium processes; idle sessions close after `browser.idleMs`.
 

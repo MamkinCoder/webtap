@@ -30,8 +30,10 @@ export interface WebtapOptions {
   /** Profiles, action cache, snapshots. Default ".webtap". */
   dataDir?: string;
   browser?: {
-    /** Default true. */
+    /** Default true. A site can override it (browser.headless: false for sites that block headless Chrome). */
     headless?: boolean;
+    /** Headful windows on screen instead of off-screen (debugging). */
+    visible?: boolean;
     executablePath?: string;
     /** Concurrent Chromium processes. Default 4. */
     maxSessions?: number;
@@ -130,6 +132,7 @@ export function createWebtap(opts: WebtapOptions): Webtap {
     dataDir,
     cache,
     headless: opts.browser?.headless ?? true,
+    ...(opts.browser?.visible ? { visible: true } : {}),
     ...(opts.browser?.executablePath ? { executablePath: opts.browser.executablePath } : {}),
     ...(opts.browser?.maxSessions ? { maxSessions: opts.browser.maxSessions } : {}),
     ...(opts.browser?.idleMs ? { idleMs: opts.browser.idleMs } : {}),

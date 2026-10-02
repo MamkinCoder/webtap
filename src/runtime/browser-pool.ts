@@ -11,6 +11,8 @@ export interface BrowserPoolOptions {
   dataDir: string;
   cache: ActionCache;
   headless: boolean;
+  /** Headful windows on screen instead of off-screen (debugging). */
+  visible?: boolean;
   executablePath?: string;
   /** Concurrent Chromium processes. Default 4. */
   maxSessions?: number;
@@ -101,6 +103,7 @@ export class BrowserPool {
     const profile = join(this.o.dataDir, "profiles", `${safe(identity.id)}__${safe(site.id)}`);
     return this.o.launcher.launch({
       headless: site.browser?.headless ?? this.o.headless,
+      ...(this.o.visible ? { visible: true } : {}),
       userDataDir: profile,
       snapshotDir: join(this.o.dataDir, "snapshots", safe(site.id)),
       cache: this.o.cache,
