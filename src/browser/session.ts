@@ -27,13 +27,13 @@ export interface SessionDeps {
 }
 
 // Runs in the page. `sel` is css, or xpath when it starts with "/" or "xpath=" (Stagehand's rule).
-const RESOLVE_JS = `(function(sel){
+export const RESOLVE_JS = `(function(sel){
   if (sel.startsWith("xpath=")) sel = sel.slice(6);
   if (sel.startsWith("/") || sel.startsWith("(")) return document.evaluate(sel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
   return document.querySelector(sel);
 })`;
 
-const fillJs = (selector: string, value: string): string => `(function(){
+export const fillJs = (selector: string, value: string): string => `(function(){
   var el = ${RESOLVE_JS}(${JSON.stringify(selector)});
   if (!el) return false;
   var v = ${JSON.stringify(value)};
@@ -92,12 +92,12 @@ const rnd = (a: number, b: number): number => a + Math.random() * (b - a);
 
 // fetch() in the page context: same-origin cookies, the browser's TLS fingerprint and whatever tokens the site's own
 // scripts set. Relative urls resolve against the current page.
-const pageFetchJs = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string }): string => `(async function(){
+export const pageFetchJs = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string }): string => `(async function(){
   var r = await fetch(${JSON.stringify(url)}, { method: ${JSON.stringify(init.method ?? "GET")}, headers: ${JSON.stringify(init.headers ?? {})}, body: ${init.body === undefined ? "undefined" : JSON.stringify(init.body)}, credentials: "include" });
   return { status: r.status, url: r.url, contentType: r.headers.get("content-type") || "", body: await r.text() };
 })()`;
 
-const TEXT_JS = (max: number): string => `(document.body ? document.body.innerText : "").slice(0, ${max})`;
+export const TEXT_JS = (max: number): string => `(document.body ? document.body.innerText : "").slice(0, ${max})`;
 
 export class StagehandSession implements BrowserSession {
   private closing: Promise<void> | undefined;

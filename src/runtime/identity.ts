@@ -33,6 +33,8 @@ export interface AcquireOptions {
   /** Give up instead of waiting longer than this for a slot. */
   maxWaitMs: number;
   signal?: AbortSignal;
+  /** Only identities that go through a proxy. */
+  proxyOnly?: boolean;
 }
 
 export class IdentityPool {
@@ -66,6 +68,7 @@ export class IdentityPool {
     let best: { identity: Identity; slot: SlotState } | undefined;
     for (const identity of this.identities) {
       if (o.exclude?.has(identity.id)) continue;
+      if (o.proxyOnly && !identity.proxy) continue;
       const slot = this.slot(identity.id, siteId);
       if (slot.quarantinedUntil > t) continue;
       if (!best || slot.nextAt < best.slot.nextAt) best = { identity, slot };
@@ -96,9 +99,9 @@ export class IdentityPool {
   }
 
   /** Why acquire() returned null: true when every identity is quarantined for this site. */
-  allQuarantined(siteId: string): boolean {
+  allQuarantined(siteId: string, proxyOnly = false): boolean {
     const t = this.now();
-    return this.identities.every((i) => this.slot(i.id, siteId).quarantinedUntil > t);
+    return this.identities.filter((i) => !proxyOnly || i.proxy).every((i) => this.slot(i.id, siteId).quarantinedUntil > t);
   }
 
   status(): IdentitySiteStatus[] {

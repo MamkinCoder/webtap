@@ -1,11 +1,12 @@
 // Avito search: cars, services (сантехник, электрик…) and any listing.
 //
-// Avito blocks headless Chrome and plain HTTP with 429 "Доступ ограничен: проблема с IP" (2026-10), while a headful
-// Chrome passes, so this site runs headful: off-screen on a desktop, on a virtual display (Xvfb) in Docker. It also
-// rate-limits hard: a burst of searches gets the IP banned for a while, hence one search at a time, seconds apart.
+// Avito (2026-10) runs a proof-of-work JS challenge (HTTP 439, pow_challenge → pow_solved cookies) and bans the IP
+// (429 "Доступ ограничен: проблема с IP") of any browser it catches being automated: plain HTTP, headless Chrome,
+// and Stagehand/Playwright-driven Chrome alike. A plain Chrome passes, so this site runs on webtap's "clean" engine
+// (Chrome started without automation flags, opening avito.ru by itself; driven without in-page instrumentation).
+// It also bans bursts: one search at a time, seconds apart.
 //
-// Data: the search page embeds its state as HTML-escaped JSON in <script type="mime/invalid" data-mfe-state="true">;
-// the listings are state.data.catalog.items (the same source the old Python parser read). No LLM involved.
+// Data: the rendered result cards ([data-marker=item]); the old embedded-state JSON is gone. No LLM involved.
 import { setTimeout as sleep } from "node:timers/promises";
 import { banned, browser, changed, defineSite, endpoint, z } from "../../src/index.js";
 
@@ -62,57 +63,60 @@ const Listing = z.object({
 export type AvitoListing = z.output<typeof Listing>;
 
 type RawItem = {
-  id?: number;
+  id?: string;
   title?: string;
-  urlPath?: string;
-  description?: string;
-  priceDetailed?: { value?: number; string?: string; fullString?: string };
-  images?: Record<string, string>[];
-  geo?: { formattedAddress?: string };
-  addressDetailed?: { locationName?: string };
-  location?: { name?: string };
+  href?: string;
+  price?: string;
+  priceText?: string;
+  img?: string;
+  location?: string;
+  params?: string;
 };
 
-// Runs in the page: the state JSON's listings, trimmed to what the recipe maps (keeps the CDP payload small).
+// Runs in the page: the visible result cards via Avito's own data-markers (stable for years, used by its tests).
 const EXTRACT_JS = `(function(){
-  var blocked = /Доступ ограничен|проблема с IP/i.test(document.title);
-  var scripts = document.querySelectorAll('script[type="mime/invalid"][data-mfe-state="true"]');
-  var decode = document.createElement("textarea");
-  for (var k = 0; k < scripts.length; k++) {
-    var raw = scripts[k].textContent || "";
-    if (raw.indexOf("sandbox") >= 0 && raw.indexOf("catalog") < 0) continue;
-    decode.innerHTML = raw;
-    try { var data = JSON.parse(decode.value); } catch (e) { continue; }
-    var catalog = data && data.state && data.state.data && data.state.data.catalog;
-    if (!catalog || !catalog.items) continue;
-    return JSON.stringify({ blocked: blocked, items: catalog.items.map(function(it){
-      return { id: it.id, title: it.title, urlPath: it.urlPath, description: it.description, priceDetailed: it.priceDetailed,
-        images: (it.images || []).slice(0, 1), geo: it.geo, addressDetailed: it.addressDetailed, location: it.location };
-    }) });
-  }
-  return JSON.stringify({ blocked: blocked, items: null, title: document.title });
+  var blocked = /Доступ ограничен|проблема с IP|проверка безопасности/i.test(document.title);
+  var text = function(el){ return el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : undefined; };
+  var items = Array.prototype.map.call(document.querySelectorAll('[data-marker="item"]'), function(it){
+    var q = function(sel){ return it.querySelector(sel); };
+    var a = q('a[data-marker="item-title"]') || q('a[itemprop="url"]');
+    var img = q('img');
+    var price = q('meta[itemprop="price"]');
+    return {
+      id: it.getAttribute("data-item-id") || undefined,
+      title: text(q('[itemprop="name"]')) || text(a),
+      href: a ? a.getAttribute("href") : undefined,
+      price: price ? price.getAttribute("content") : undefined,
+      priceText: text(q('[data-marker="item-price"]')),
+      img: img ? (img.getAttribute("src") || img.getAttribute("data-src") || undefined) : undefined,
+      location: text(q('[data-marker="item-location"]')) || text(q('[data-marker="item-address"]')),
+      params: text(q('[data-marker="item-specific-params"]'))
+    };
+  });
+  return JSON.stringify({ blocked: blocked, title: document.title, items: items });
 })()`;
 
 export function parseAvitoItems(raw: RawItem[], limit: number): AvitoListing[] {
-  return raw
-    .filter((it) => typeof it.id === "number" && it.title && it.urlPath)
-    .slice(0, limit)
-    .map((it) => {
-      const img = it.images?.[0];
-      const imageUrl = img ? (img["472x355"] ?? img["208x156"] ?? Object.values(img)[0]) : undefined;
-      const address = it.geo?.formattedAddress || it.addressDetailed?.locationName || it.location?.name;
-      const description = it.description?.replace(/\s+/g, " ").trim().slice(0, 200);
-      return {
-        id: it.id!,
-        title: it.title!,
-        ...(typeof it.priceDetailed?.value === "number" && it.priceDetailed.value > 0 ? { priceRub: it.priceDetailed.value } : {}),
-        ...(it.priceDetailed?.fullString || it.priceDetailed?.string ? { priceText: (it.priceDetailed.fullString || it.priceDetailed.string)! } : {}),
-        ...(address ? { address } : {}),
-        ...(description ? { description } : {}),
-        url: `https://www.avito.ru${it.urlPath}`,
-        ...(imageUrl ? { imageUrl } : {}),
-      };
+  const out: AvitoListing[] = [];
+  for (const it of raw) {
+    const id = Number(it.id);
+    if (!id || !it.title || !it.href) continue;
+    const priceRub = Number(it.price);
+    const url = new URL(it.href, "https://www.avito.ru");
+    url.search = ""; // drop the tracking context
+    out.push({
+      id,
+      title: it.title,
+      ...(priceRub > 0 ? { priceRub } : {}),
+      ...(it.priceText ? { priceText: it.priceText } : {}),
+      ...(it.location ? { address: it.location } : {}),
+      ...(it.params ? { description: it.params.slice(0, 200) } : {}),
+      url: url.toString(),
+      ...(it.img && /^https?:/.test(it.img) ? { imageUrl: it.img } : {}),
     });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
@@ -123,8 +127,10 @@ export const avito = defineSite({
   description: "Avito classifieds: cars, services, goods",
   // One search at a time per identity, well apart: bursts get the IP banned.
   rateLimit: { minIntervalMs: 8_000, maxConcurrent: 1 },
+  // Avito bans home and datacenter IPs quickly: only proxy identities (a Russian mobile proxy, IP rotation on a ban).
+  requireProxy: true,
   banCooldownMs: 30 * 60_000,
-  browser: { headless: false, blockAssets: false, loadImages: true },
+  browser: { engine: "clean", headless: false, blockAssets: false, loadImages: true },
   endpoints: {
     search: endpoint(
       {
@@ -142,17 +148,20 @@ export const avito = defineSite({
         strategies: [
           browser({
             run: async (s, i) => {
-              // Arrive like a visitor: the homepage first when this tab is new to Avito, a pause, then the search.
+              // The clean engine opened avito.ru itself (the challenge ran there); a lost tab goes back home first.
               if (!(await s.url().catch(() => "")).startsWith("https://www.avito.ru")) {
                 await s.goto("https://www.avito.ru/");
                 await sleep(rnd(2_500, 4_500));
               }
               await s.goto(avitoSearchUrl(i));
+              await s.waitForSelector('[data-marker="item"]', 10_000);
               await s.humanize([], rnd(1_200, 2_500));
-              const out = JSON.parse(await s.evaluate<string>(EXTRACT_JS)) as { blocked: boolean; items: RawItem[] | null; title?: string };
-              if (out.blocked) throw banned("Avito: Доступ ограничен (IP / bot check)");
-              if (!out.items) throw changed(`no catalog state on the search page (${out.title ?? "?"})`);
-              return { items: parseAvitoItems(out.items, i.limit) };
+              const out = JSON.parse(await s.evaluate<string>(EXTRACT_JS)) as { blocked: boolean; title: string; items: RawItem[] };
+              if (out.blocked) throw banned(`Avito: ${out.title}`);
+              const items = parseAvitoItems(out.items, i.limit);
+              // A real "nothing found" page still renders; an empty page without cards is not a result.
+              if (!items.length && !(await s.text(4_000)).match(/ничего не найдено|не нашли|Нет объявлений/i)) throw changed(`no result cards on the search page (${out.title})`);
+              return { items };
             },
           }),
         ],

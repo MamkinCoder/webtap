@@ -12,6 +12,8 @@ export interface Identity {
   proxy?: ProxyConfig;
   userAgent?: string;
   languages?: string[];
+  /** A url that gives the proxy a new exit IP (mobile proxies have one). Called on a ban instead of a long quarantine. */
+  rotateUrl?: string;
 }
 
 export interface HttpRequest {
@@ -68,10 +70,20 @@ export interface SiteDef {
   description?: string;
   /** Per identity: at most one request every minIntervalMs to this site. Default 1000. */
   rateLimit?: { minIntervalMs?: number; maxConcurrent?: number };
+  /** Only identities with a proxy may call this site (it has banned this machine's own IP, or soon would). */
+  requireProxy?: boolean;
   /** First quarantine of an identity after a ban; doubles on repeats (max 6 h). Default 10 min. */
   banCooldownMs?: number;
   /** Browser settings for this site's sessions. */
-  browser?: { blockAssets?: boolean; loadImages?: boolean; headless?: boolean; blockUrls?: string[] };
+  browser?: {
+    /** "stagehand" (default): act/extract/observe with an LLM. "clean": a plain Chrome driven without in-page
+     * instrumentation, for sites that ban automated browsers (goto + evaluate + fetch only). */
+    engine?: "stagehand" | "clean";
+    blockAssets?: boolean;
+    loadImages?: boolean;
+    headless?: boolean;
+    blockUrls?: string[];
+  };
   endpoints: Record<string, Endpoint>;
 }
 

@@ -19,6 +19,12 @@ describe("IdentityPool", () => {
     expect((await pool.acquire("wb", o))?.id).toBe("a");
   });
 
+  it("restricts proxy-only sites to proxy identities", async () => {
+    const pool = new IdentityPool([{ id: "direct" }, { id: "mobile", proxy: { server: "http://p:1" } }], () => 0);
+    expect((await pool.acquire("avito", { minIntervalMs: 0, maxWaitMs: 0, proxyOnly: true }))?.id).toBe("mobile");
+    expect(await pool.acquire("avito", { minIntervalMs: 0, maxWaitMs: 0, proxyOnly: true, exclude: new Set(["mobile"]) })).toBeNull();
+  });
+
   it("quarantines per site with doubling cooldowns", async () => {
     let now = 0;
     const pool = new IdentityPool([{ id: "a" }], () => now);

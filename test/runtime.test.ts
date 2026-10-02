@@ -113,6 +113,30 @@ describe("fallback and outcomes", () => {
     await wt.close();
   });
 
+  it("rotates a proxy's IP on a ban and retries after a short pause instead of a long quarantine", async () => {
+    let rotations = 0;
+    const rot = createHttpServer((_req, res) => {
+      rotations++;
+      res.end('{"status":"OK"}');
+    });
+    await new Promise<void>((r) => rot.listen(0, "127.0.0.1", r));
+    const rotateUrl = `http://127.0.0.1:${(rot.address() as AddressInfo).port}/change`;
+    const wt = createWebtap({
+      launcher: noBrowser,
+      identities: [{ id: "mobile", proxy: { server: "http://127.0.0.1:1" }, rotateUrl }],
+      sites: [siteWith([fake("api", () => Promise.reject(banned("429")))])],
+    });
+    try {
+      await wt.call("shop", "search", { q: "x" }).catch(() => undefined);
+      expect(rotations).toBe(1);
+      const st = wt.health().identities.find((s) => s.identity === "mobile");
+      expect(st?.quarantinedForMs).toBeLessThanOrEqual(15_000);
+    } finally {
+      await wt.close();
+      rot.close();
+    }
+  }, 20_000);
+
   it("fails with every attempt listed when all identities are banned", async () => {
     const wt = createWebtap({
       launcher: noBrowser,

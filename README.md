@@ -54,14 +54,24 @@ createWebtap({
   sites,
   identities: [
     { id: "home" }, // this machine's IP
-    { id: "mts-1", proxy: { server: "http://10.0.0.5:3128", username: "u", password: "p" } },
+    { id: "mts-1", proxy: { server: "http://10.0.0.5:3128", username: "u", password: "p" }, rotateUrl: "https://…/change-ip" },
   ],
 });
 ```
 
-Some sites block headless Chrome outright (Avito answers 429 to it while a normal window passes): give them
-`browser: { headless: false }`. Headful windows open off-screen on a desktop and on a virtual display (Xvfb) on a
-Linux server.
+### The clean engine (sites that ban automated browsers)
+
+Some sites catch any automated Chrome, headless or not, and ban its IP: Avito runs a proof-of-work challenge and
+bans what Playwright/Stagehand-driven Chrome looks like, while a hand-started Chrome passes. For them,
+`browser: { engine: "clean" }` starts a plain Chrome (no automation flags) that opens the site by itself, and drives
+it with browser-level CDP plus single in-page commands that need no domain enabled (`Page.navigate`,
+`Runtime.evaluate`), so nothing in the page changes. Windows stay on-screen (an off-screen window is itself a tell):
+on a Linux server that is a virtual display (Xvfb). The engine has no LLM `act`/`extract`: recipes use `goto`,
+`evaluate`, `fetch` and the DOM. See [`examples/sites/avito.ts`](examples/sites/avito.ts).
+
+Proxies with credentials work on both engines (a local relay adds them; Stagehand's own browser can't take them).
+`requireProxy: true` keeps a site off this machine's own IP. An identity's `rotateUrl` (mobile proxies have an
+"change IP" link) is called on a ban: new IP, fresh session, a 15 s pause instead of a 30 min quarantine.
 
 Each (identity, site) pair keeps a warm Chromium with a persistent profile, so solved challenges survive between calls
 and restarts. `browser.maxSessions` caps concurrent Chromium processes; idle sessions close after `browser.idleMs`.

@@ -14,6 +14,7 @@ import type { BrowserLauncher, BrowserOptions, BrowserSession, WebtapLLM } from 
 import { adaptLLM } from "./adapter.js";
 import { ActionCache } from "./cache.js";
 import { installUrlBlocker } from "./cdp.js";
+import { startProxyRelay } from "./proxy-relay.js";
 import { StagehandSession } from "./session.js";
 
 const DEFAULT_VIEWPORT = { width: 1366, height: 850 } as const;
@@ -124,14 +125,23 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
       // A headful window on a real desktop goes off-screen unless asked to be visible (Xvfb has no one to bother).
       const offscreen = !headless && !opts.visible && process.platform !== "linux" ? ["--window-position=-32000,-32000"] : [];
 
-      const browser = await localBrowser.launch({
+      // Stagehand's local browser takes no proxy credentials: put a local relay in front of an authenticated proxy.
+      let proxy = opts.proxy;
+      if (proxy && (proxy.username || proxy.password)) {
+        const relay = await startProxyRelay(proxy);
+        cleanup.push(() => relay.close());
+        proxy = { server: relay.server };
+      }
+
+      const browser = await localBrowser
+        .launch({
         ...(executablePath ? { executablePath } : {}),
         userDataDir: opts.userDataDir,
         preserveUserDataDir: true,
         // Headful needs a screen: a virtual one on a bare Linux box, else headless.
         headless,
         ignoreDefaultArgs: ["--enable-automation"],
-        ...(opts.proxy ? { proxy: opts.proxy } : {}),
+        ...(proxy ? { proxy } : {}),
         locale: languages[0],
         args: [
           ...CHROMIUM_ARGS,
@@ -151,7 +161,11 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
           `--disk-cache-size=${DISK_CACHE_BYTES}`,
         ],
         viewport: { ...viewport },
-      });
+        })
+        .catch(async (err: unknown) => {
+          await Promise.allSettled(cleanup.map((fn) => fn()));
+          throw err;
+        });
 
       let stagehand: Stagehand;
       try {

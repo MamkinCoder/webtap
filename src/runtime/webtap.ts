@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from "undici";
 import { z } from "zod";
 import { ActionCache } from "../browser/cache.js";
+import { createCleanLauncher } from "../browser/clean.js";
 import { createLauncher } from "../browser/launcher.js";
 import { errMessage, type BrowserLauncher, type BrowserSession, type WebtapLLM } from "../types.js";
 import { BrowserPool, type Lease } from "./browser-pool.js";
@@ -47,6 +48,8 @@ export interface WebtapOptions {
   onEvent?: (e: WebtapEvent) => void;
   /** Custom browser launcher (tests, remote browsers). */
   launcher?: BrowserLauncher;
+  /** Custom launcher for clean-engine sites. */
+  cleanLauncher?: BrowserLauncher;
 }
 
 export interface Attempt {
@@ -113,6 +116,21 @@ export interface Webtap {
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MIN_INTERVAL_MS = 1_000;
 const DEFAULT_BAN_COOLDOWN_MS = 10 * 60_000;
+const ROTATED_COOLDOWN_MS = 15_000;
+
+/** Calls a proxy's IP-change url; true when it answered 2xx. */
+async function rotateIp(url: string): Promise<boolean> {
+  try {
+    const res = await undiciFetch(url, { signal: AbortSignal.timeout(60_000) });
+    await res.text();
+    if (!res.ok) return false;
+    await new Promise((r) => setTimeout(r, 5_000)); // the modem reconnects
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const BROWSER_BROKEN = /target closed|session closed|browser has been closed|disconnected|websocket|crash|ECONNREFUSED/i;
 const FALLBACK_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
@@ -129,6 +147,7 @@ export function createWebtap(opts: WebtapOptions): Webtap {
   const cache = new ActionCache(join(dataDir, "action-cache"));
   const pool = new BrowserPool({
     launcher: opts.launcher ?? createLauncher(opts.llm),
+    cleanLauncher: opts.cleanLauncher ?? createCleanLauncher(),
     dataDir,
     cache,
     headless: opts.browser?.headless ?? true,
@@ -229,9 +248,12 @@ export function createWebtap(opts: WebtapOptions): Webtap {
         const tried = new Set<string>();
         let errors = 0;
         for (let i = 0; i < maxIdentityAttempts && !signal.aborted; i++) {
-          const identity = await identities.acquire(site.id, { minIntervalMs, exclude: tried, maxWaitMs, signal }).catch(() => null);
+          const proxyOnly = !!site.requireProxy;
+          const identity = await identities.acquire(site.id, { minIntervalMs, exclude: tried, maxWaitMs, signal, proxyOnly }).catch(() => null);
           if (!identity) {
-            const why = identities.allQuarantined(site.id) ? "every identity is quarantined for this site" : tried.size ? "no other identity available" : "rate limited";
+            const why = proxyOnly && !identities.identities.some((x) => x.proxy)
+              ? "this site requires a proxy identity and none is configured"
+              : identities.allQuarantined(site.id, proxyOnly) ? "every identity is quarantined for this site" : tried.size ? "no other identity available" : "rate limited";
             record({ strategy: strategy.name, outcome: "skipped", message: why, ms: 0 });
             break;
           }
@@ -268,12 +290,15 @@ export function createWebtap(opts: WebtapOptions): Webtap {
             outcome = f.outcome;
             message = f.message;
           } finally {
-            // A crashed or wedged browser is not trusted warm; any other failure keeps the session (and its solved
-            // challenge) for the next call.
-            await lease?.release(outcome === "error" && (signal.aborted || BROWSER_BROKEN.test(message)));
+            // A crashed or wedged browser is not trusted warm; neither is a banned one whose IP is about to change
+            // (its cookies belong to the old IP). Any other failure keeps the session and its solved challenge.
+            await lease?.release((outcome === "error" && (signal.aborted || BROWSER_BROKEN.test(message))) || (outcome === "banned" && !!identity.rotateUrl));
           }
           const ms = Date.now() - t0;
-          identities.report(site.id, identity.id, outcome, banCooldownMs);
+          // A rotatable proxy gets a new IP instead of a long quarantine: a short pause, then it is usable again.
+          const rotated = outcome === "banned" && identity.rotateUrl ? await rotateIp(identity.rotateUrl) : false;
+          if (rotated) message = `${message}; rotated the proxy IP`;
+          identities.report(site.id, identity.id, outcome, rotated ? ROTATED_COOLDOWN_MS : banCooldownMs);
           stats.attempt(site.id, endpointName, strategy.name, outcome, ms, message);
           record({ strategy: strategy.name, identity: identity.id, outcome, message, ms });
           if (outcome === "changed") {
@@ -286,7 +311,7 @@ export function createWebtap(opts: WebtapOptions): Webtap {
           }
           // A first transient error may retry on the same identity (after its rate-limit gap) when it is the only one
           // left; a ban never does.
-          if (outcome === "error" && identities.identities.every((x) => tried.has(x.id))) tried.delete(identity.id);
+          if (outcome === "error" && identities.identities.every((x) => tried.has(x.id) || (site.requireProxy && !x.proxy))) tried.delete(identity.id);
           // banned (or a first error): same strategy, another identity when there is one
         }
       }

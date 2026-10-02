@@ -17,6 +17,7 @@ export type { ServerOptions } from "./server.js";
 
 // Browser layer, usable on its own.
 export { createLauncher, desktopUserAgent, findChrome } from "./browser/launcher.js";
+export { createCleanLauncher } from "./browser/clean.js";
 export { ActionCache } from "./browser/cache.js";
 export type * from "./types.js";
 

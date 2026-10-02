@@ -8,6 +8,8 @@ import type { Identity, SiteDef } from "./site.js";
 
 export interface BrowserPoolOptions {
   launcher: BrowserLauncher;
+  /** For sites with browser.engine "clean". */
+  cleanLauncher?: BrowserLauncher;
   dataDir: string;
   cache: ActionCache;
   headless: boolean;
@@ -101,7 +103,12 @@ export class BrowserPool {
 
   private launch(identity: Identity, site: SiteDef): Promise<BrowserSession> {
     const profile = join(this.o.dataDir, "profiles", `${safe(identity.id)}__${safe(site.id)}`);
-    return this.o.launcher.launch({
+    const clean = site.browser?.engine === "clean";
+    const launcher = clean ? this.o.cleanLauncher : this.o.launcher;
+    if (!launcher) throw new Error(`webtap: site ${site.id} needs the clean engine, but no clean launcher is configured`);
+    return launcher.launch({
+      // The clean engine has Chrome open the site itself, before any CDP command touches the page.
+      ...(clean ? { startUrl: new URL("/", site.origin).toString() } : {}),
       headless: site.browser?.headless ?? this.o.headless,
       ...(this.o.visible ? { visible: true } : {}),
       userDataDir: profile,
