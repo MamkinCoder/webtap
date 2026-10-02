@@ -86,6 +86,8 @@ export interface BrowserSession {
   /** `quick`: DOM ready only; default also waits for load + a short network idle. */
   goto(url: string, opts?: { quick?: boolean }): Promise<void>;
   url(): Promise<string>;
+  /** Browser-level CDP websocket url, for extra raw CDP clients (the mapper's network recorder). */
+  cdpUrl?(): string | undefined;
   html(): Promise<string>;
   /** Visible text of the page (innerText), capped. */
   text(maxChars?: number): Promise<string>;

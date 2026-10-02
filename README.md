@@ -21,6 +21,7 @@ action cache, so the LLM is only needed when something is new or has changed.
 |---|---|---|---|
 | `http()` | plain HTTP from Node through the identity's proxy | ~100 ms, KB | the site's (internal) JSON API answers plain requests |
 | `pageFetch()` | the same request made by `fetch()` inside a warm browser tab | ~0.5 s warm, KB | the API sits behind an anti-bot challenge: the tab has the browser's TLS fingerprint, cookies and tokens |
+| `requests()` | several dependent calls (suggest → id → search → details), over HTTP or inside the tab | ~1–2 s | the data call needs ids that earlier calls return |
 | `browser()` | drive the page: `act()` with cached selectors, `extract()` with the LLM | seconds, MB | there is no usable API |
 
 The runtime tries them in order and returns the first output that passes the endpoint's zod schema and `verify`.
@@ -99,6 +100,38 @@ Working examples, recorded from the sites' own frontends: [`examples/sites/wildb
 (page-fetch through WB's anti-bot check, LLM browser fallback) and
 [`examples/sites/yandex-eda.ts`](examples/sites/yandex-eda.ts) (HTTP with a page-fetch fallback).
 
+## Mapping a new site
+
+`webtap map` writes a site file for you. An LLM drives the site in Chrome until it shows the results, every response
+is recorded, and the request that carried the data the page showed becomes the endpoint:
+
+```bash
+WEBTAP_LLM=claude npx webtap map https://sutochno.ru/ \
+  --goal "find places to stay in a city for given check-in and check-out dates, with the price for the stay" \
+  --input city=Сочи --input checkIn=2026-10-16 --input checkOut=2026-10-18 \
+  --fields "title,priceRub:number?,rating:number?,address?,url,imageUrl?" \
+  --id sutochno --out sites/sutochno.ts
+```
+
+1. **Explore:** the agent operates the site step by step (`act`, so the elements it finds are cached). When a form
+   control fights back, it uses the site's own URL patterns instead. A captcha stops the run with an error.
+2. **Ground truth:** it reads a few results off the page.
+3. **Find the data:** the recorded JSON response containing those results is the data request; sample input values in
+   its URL and body become parameters.
+4. **Chains:** if an input is missing from that request (the site turned the city into an id first), the mapper
+   traces which earlier response produced each id back to a call that carries the input, e.g.
+   `suggest?query=Сочи → location.id → searchObjectsOnMap → ids → searchObjectsByLocation`.
+5. **Codegen, checked live:** the LLM writes the `parse` function (or the whole call chain). It runs against the
+   recorded response or the live site and must reproduce the page's results, with errors fed back.
+6. **Output:** a site file with the verified strategies cheapest first (`http`/`requests` over plain HTTP, then inside
+   the tab) and the explored steps as the browser fallback.
+
+The output is a draft for review: check which price it maps (per night or per stay), hard-coded tokens, and the notes
+at the top. Site files belong in git; webtap's runtime state (`.webtap/`: profiles, healed selectors) does not.
+
+LLM: `WEBTAP_LLM=claude` uses the `claude` CLI (sonnet to explore and write code, haiku for Stagehand), or set
+`OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL`.
+
 ## Running it
 
 ```ts
@@ -146,12 +179,10 @@ strategies.
 
 ## Roadmap
 
-- **Mapper:** an agent that drives a site, records its network traffic, and drafts the site file (strategies,
-  schemas, canary) for a human to review.
+- Mapper: paginated results, POST forms with CSRF tokens, re-mapping triggered by canary failures.
 - **Shared state** for several workers: identity slots, breakers and the action cache in Redis or Postgres (the
   in-memory classes are the interfaces).
 - Browser-solved tokens reused by plain HTTP with a Chrome-like TLS fingerprint.
-- Re-mapping triggered by canary failures.
 
 ## Use responsibly
 

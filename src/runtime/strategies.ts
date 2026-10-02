@@ -2,6 +2,7 @@
 //   http()       plain HTTP from Node through the identity's proxy            ~100 ms, KB of traffic
 //   pageFetch()  the same request made by fetch() inside a warm browser tab   ~500 ms: the browser's TLS, cookies and
 //                anti-bot tokens, so it passes where plain HTTP is challenged
+//   requests()   several dependent calls (suggest → id → search → details), over HTTP or inside the tab
 //   browser()    drive the page (act / extract, cached selectors + healing)   seconds, MB of traffic, the last resort
 import { setTimeout as sleep } from "node:timers/promises";
 import type { BrowserSession } from "../types.js";
@@ -47,31 +48,80 @@ export interface PageFetchStrategyOptions<I, O> {
   settleMs?: number;
 }
 
+/** The identity's tab, on the site's warm page; `rewarm` reopens it so the site's scripts can renew their tokens. */
+async function warmTab(ctx: StrategyContext, warmUrl: string, settleMs: number): Promise<{ s: BrowserSession; rewarm: () => Promise<void> }> {
+  const s = await ctx.session();
+  const warm = new URL(warmUrl, ctx.site.origin).toString();
+  const rewarm = async () => {
+    await s.goto(warm);
+    await sleep(settleMs);
+  };
+  if (!sameOrigin(await s.url().catch(() => ""), warm)) await rewarm();
+  return { s, rewarm };
+}
+
+/** Runs `fn`; on a ban (stale or unsolved challenge) reopens the warm page once and retries. */
+async function retryAfterRewarm<T>(fn: () => Promise<T>, rewarm: () => Promise<void>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!(err instanceof StrategyFailure) || err.outcome !== "banned") throw err;
+    await rewarm();
+    return fn();
+  }
+}
+
 export function pageFetch<I, O>(o: PageFetchStrategyOptions<I, O>): Strategy<I, O> {
-  const settle = o.settleMs ?? 3_000;
   return {
     kind: "page-fetch",
     name: o.name ?? "page-fetch",
     async run(ctx, input) {
-      const s = await ctx.session();
-      const warm = new URL(o.warmUrl, ctx.site.origin).toString();
-      const warmUp = async () => {
-        await s.goto(warm);
-        await sleep(settle);
-      };
-      if (!sameOrigin(await s.url().catch(() => ""), warm)) await warmUp();
+      const { s, rewarm } = await warmTab(ctx, o.warmUrl, o.settleMs ?? 3_000);
       const req = o.request(input, ctx);
-      const once = async () => parseJsonBody(await inPage(s, req, ctx.site.origin));
-      let json: unknown;
-      try {
-        json = await once();
-      } catch (err) {
-        // A stale or unsolved challenge: reopen the warm page once, let its scripts run, retry.
-        if (!(err instanceof StrategyFailure) || err.outcome !== "banned") throw err;
-        await warmUp();
-        json = await once();
-      }
+      const json = await retryAfterRewarm(async () => parseJsonBody(await inPage(s, req, ctx.site.origin)), rewarm);
       return parseWith(o.parse, json, input);
+    },
+  };
+}
+
+/** Makes one request and returns its JSON body; failures are classified like any strategy's (banned / changed / error). */
+export type FetchJson = (req: HttpRequest) => Promise<any>;
+
+export interface RequestsStrategyOptions<I, O> {
+  name?: string;
+  /** "http" (default): plain HTTP from Node. "page": fetch() inside the warm tab (needs warmUrl). */
+  via?: "http" | "page";
+  warmUrl?: string;
+  settleMs?: number;
+  /** Several dependent calls (a suggest call → an id → a search call → details), mapped to the output. */
+  run: (input: I, fetchJson: FetchJson) => Promise<O>;
+}
+
+/** A chain of requests: for sites where the data call needs ids that earlier calls return. */
+export function requests<I, O>(o: RequestsStrategyOptions<I, O>): Strategy<I, O> {
+  const page = o.via === "page";
+  return {
+    kind: page ? "page-fetch" : "http",
+    name: o.name ?? (page ? "page-fetch" : "http"),
+    async run(ctx, input) {
+      let fetchJson: FetchJson;
+      let rewarm: (() => Promise<void>) | undefined;
+      if (page) {
+        const tab = await warmTab(ctx, o.warmUrl ?? "/", o.settleMs ?? 3_000);
+        rewarm = tab.rewarm;
+        fetchJson = async (req) => parseJsonBody(await inPage(tab.s, req, ctx.site.origin));
+      } else {
+        fetchJson = async (req) => parseJsonBody(await ctx.fetch(req));
+      }
+      const once = async () => {
+        try {
+          return await o.run(input, fetchJson);
+        } catch (err) {
+          if (err instanceof StrategyFailure) throw err;
+          throw changed(`request chain failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      };
+      return rewarm ? retryAfterRewarm(once, rewarm) : once();
     },
   };
 }

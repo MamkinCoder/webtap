@@ -22,6 +22,8 @@ export interface SessionDeps {
   cache: ActionCache;
   /** Extra teardown (asset blocker socket, temp cache dir …). Runs after the browser is closed. */
   cleanup: (() => Promise<void> | void)[];
+  /** Browser-level CDP websocket, for extra raw CDP clients (recorder, URL blocker). */
+  cdpUrl?: string;
 }
 
 // Runs in the page. `sel` is css, or xpath when it starts with "/" or "xpath=" (Stagehand's rule).
@@ -128,6 +130,10 @@ export class StagehandSession implements BrowserSession {
 
   url(): Promise<string> {
     return this.page.url();
+  }
+
+  cdpUrl(): string | undefined {
+    return this.d.cdpUrl;
   }
 
   html(): Promise<string> {

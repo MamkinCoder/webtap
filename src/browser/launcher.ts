@@ -186,6 +186,7 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
         opts,
         cache: opts.cache ?? new ActionCache(),
         cleanup,
+        ...(stagehand.rpcClient?.browserWebSocketDebuggerUrl ? { cdpUrl: stagehand.rpcClient.browserWebSocketDebuggerUrl } : {}),
       });
     },
   };
