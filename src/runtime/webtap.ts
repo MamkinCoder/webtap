@@ -20,6 +20,7 @@ import { Breaker, Stats, type BreakerOptions, type CanaryResult, type EndpointHe
 import { IdentityPool, type IdentitySiteStatus } from "./identity.js";
 import { StrategyFailure, changed, type Outcome } from "./outcome.js";
 import type { Endpoint, HttpRequest, HttpResponse, Identity, SiteDef, StrategyContext } from "./site.js";
+import { browserHeaders } from "./fingerprint.js";
 import { encodeBody } from "./strategies.js";
 
 export interface WebtapOptions {
@@ -132,7 +133,6 @@ async function rotateIp(url: string): Promise<boolean> {
 }
 
 const BROWSER_BROKEN = /target closed|session closed|browser has been closed|disconnected|websocket|crash|ECONNREFUSED/i;
-const FALLBACK_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 export function createWebtap(opts: WebtapOptions): Webtap {
   const sites = new Map<string, SiteDef>();
@@ -194,14 +194,14 @@ export function createWebtap(opts: WebtapOptions): Webtap {
   const httpFetch = async (site: SiteDef, identity: Identity, req: HttpRequest, signal: AbortSignal): Promise<HttpResponse> => {
     const { body, headers } = encodeBody(req);
     const dispatcher = dispatcherFor(identity);
-    const res = await undiciFetch(new URL(req.url, site.origin), {
-      method: req.method ?? (body === undefined ? "GET" : "POST"),
-      headers: {
-        "user-agent": identity.userAgent ?? FALLBACK_UA,
-        "accept-language": (identity.languages ?? ["ru-RU", "ru", "en-US", "en"]).join(","),
-        accept: "application/json, text/plain, */*",
-        ...headers,
-      },
+    const url = new URL(req.url, site.origin);
+    const method = req.method ?? (body === undefined ? "GET" : "POST");
+    // A coherent Chrome (UA + client hints + fetch metadata); the recipe's own headers win.
+    const merged: Record<string, string> = { ...browserHeaders(identity, site, url, method) };
+    for (const [k, v] of Object.entries(headers)) merged[k.toLowerCase()] = v;
+    const res = await undiciFetch(url, {
+      method,
+      headers: merged,
       ...(body !== undefined ? { body } : {}),
       ...(dispatcher ? { dispatcher } : {}),
       signal,

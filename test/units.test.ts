@@ -5,11 +5,12 @@ import { extractJson } from "../src/llm/json.js";
 import { Breaker } from "../src/runtime/health.js";
 import { IdentityPool } from "../src/runtime/identity.js";
 import { classifyResponse } from "../src/runtime/outcome.js";
+import { acceptLanguage, browserHeaders } from "../src/runtime/fingerprint.js";
 
 describe("IdentityPool", () => {
   it("spreads requests by earliest free slot and refuses waits over maxWaitMs", async () => {
     let now = 1_000;
-    const pool = new IdentityPool([{ id: "a" }, { id: "b" }], () => now);
+    const pool = new IdentityPool([{ id: "a" }, { id: "b" }], () => now, () => 0.5); // jitter pinned to 1.0x
     const o = { minIntervalMs: 10_000, maxWaitMs: 0 };
     expect((await pool.acquire("wb", o))?.id).toBe("a");
     expect((await pool.acquire("wb", o))?.id).toBe("b");
@@ -41,6 +42,42 @@ describe("IdentityPool", () => {
     now = 3_000;
     pool.report("wb", "a", "ok", 1_000);
     expect(await pool.acquire("wb", o)).not.toBeNull();
+  });
+});
+
+describe("IdentityPool jitter", () => {
+  it("spreads intervals ±30% around the configured pace", async () => {
+    let r = 0;
+    const pool = new IdentityPool([{ id: "a" }], () => 0, () => r);
+    await pool.acquire("s", { minIntervalMs: 1_000, maxWaitMs: 0 });
+    r = 1;
+    expect(await pool.acquire("s", { minIntervalMs: 1_000, maxWaitMs: 699 })).toBeNull(); // slot at 700 ms
+    expect(await pool.acquire("s", { minIntervalMs: 1_000, maxWaitMs: 2_000 })).not.toBeNull();
+  });
+});
+
+describe("browserHeaders", () => {
+  const site = { id: "wb", origin: "https://www.wildberries.ru", endpoints: {} };
+  const ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+  it("matches client hints to the user agent and sets fetch metadata like Chrome", () => {
+    const h = browserHeaders({ id: "x", userAgent: ua }, site, new URL("https://www.wildberries.ru/__internal/search"), "GET");
+    expect(h["sec-ch-ua"]).toContain('"Google Chrome";v="153"');
+    expect(h["sec-ch-ua-platform"]).toBe('"macOS"');
+    expect(h["sec-ch-ua-mobile"]).toBe("?0");
+    expect(h["sec-fetch-site"]).toBe("same-origin");
+    expect(h.referer).toBe("https://www.wildberries.ru/");
+    expect(h.origin).toBeUndefined(); // same-origin GET: Chrome sends none
+  });
+  it("marks sibling subdomains same-site and adds Origin off-origin or on POST", () => {
+    const sub = browserHeaders({ id: "x", userAgent: ua }, site, new URL("https://basket-01.wildberries.ru/x"), "GET");
+    expect(sub["sec-fetch-site"]).toBe("same-site");
+    expect(sub.origin).toBe("https://www.wildberries.ru");
+    const post = browserHeaders({ id: "x", userAgent: ua }, site, new URL("https://www.wildberries.ru/x"), "POST");
+    expect(post.origin).toBe("https://www.wildberries.ru");
+    expect(browserHeaders({ id: "x", userAgent: ua }, site, new URL("https://cdn.other.ru/x"), "GET")["sec-fetch-site"]).toBe("cross-site");
+  });
+  it("writes Accept-Language with Chrome's q weights", () => {
+    expect(acceptLanguage(["ru-RU", "ru", "en-US", "en"])).toBe("ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
   });
 });
 

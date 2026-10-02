@@ -13,8 +13,8 @@ export interface BrowserOptions {
   /** Chrome / Chromium binary. Omitted: the usual install locations (findChrome()), then Stagehand's own lookup. */
   executablePath?: string;
   headless: boolean;
-  /** Headful only: show the window. Default false: on a desktop it opens off-screen (a real, non-headless browser,
-   * which some anti-bot checks require, without windows popping up). On Linux without a display it uses Xvfb. */
+  /** Deprecated, no effect: headful windows are always on-screen (an off-screen window is a bot tell, and on a Linux
+   * server they live on a virtual display). */
   visible?: boolean;
   /** Persistent profile dir, so cookies and solved challenges survive restarts. Also used to find the process tree. */
   userDataDir: string;

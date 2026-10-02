@@ -59,6 +59,16 @@ createWebtap({
 });
 ```
 
+### Default hardening (all sites, no speed cost)
+
+- Plain-HTTP calls look like the installed Chrome: matching user agent and `sec-ch-ua` client hints, fetch metadata
+  (`sec-fetch-*`), referer, and Origin where Chrome would send one. Recipe headers still win.
+- Rate limits have ±30% jitter: the same average pace without a bot's metronome.
+- Headful windows are always on-screen (an off-screen window is a bot tell); on a Linux server, a virtual display.
+
+Opt-in per site, because they cost time or features: `browser: { blockAssets: false, loadImages: true }` (a browser
+that never loads images is a tell for some sites) and the clean engine below.
+
 ### The clean engine (sites that ban automated browsers)
 
 Some sites catch any automated Chrome, headless or not, and ban its IP: Avito runs a proof-of-work challenge and

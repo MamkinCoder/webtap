@@ -43,6 +43,7 @@ export class IdentityPool {
   constructor(
     readonly identities: readonly Identity[],
     private readonly now: () => number = Date.now,
+    private readonly random: () => number = Math.random,
   ) {
     if (!identities.length) throw new Error("webtap: at least one identity is required");
     const ids = new Set(identities.map((i) => i.id));
@@ -76,7 +77,8 @@ export class IdentityPool {
     if (!best) return null;
     const wait = Math.max(0, best.slot.nextAt - t);
     if (wait > o.maxWaitMs) return null;
-    best.slot.nextAt = Math.max(t, best.slot.nextAt) + o.minIntervalMs;
+    // ±30% jitter: the same average pace, without the metronome a bot keeps.
+    best.slot.nextAt = Math.max(t, best.slot.nextAt) + Math.round(o.minIntervalMs * (0.7 + this.random() * 0.6));
     if (wait > 0) await sleep(wait, undefined, o.signal ? { signal: o.signal } : undefined);
     return best.identity;
   }

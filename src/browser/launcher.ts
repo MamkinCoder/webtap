@@ -122,8 +122,6 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
       const ua = opts.userAgent || desktopUserAgent(executablePath);
 
       const headless = opts.headless || !(await ensureDisplay());
-      // A headful window on a real desktop goes off-screen unless asked to be visible (Xvfb has no one to bother).
-      const offscreen = !headless && !opts.visible && process.platform !== "linux" ? ["--window-position=-32000,-32000"] : [];
 
       // Stagehand's local browser takes no proxy credentials: put a local relay in front of an authenticated proxy.
       let proxy = opts.proxy;
@@ -145,7 +143,6 @@ export function createLauncher(llm: WebtapLLM = NO_LLM): BrowserLauncher {
         locale: languages[0],
         args: [
           ...CHROMIUM_ARGS,
-          ...offscreen,
           // A proxy-less identity browses direct: Linux Chromium would otherwise honour HTTP(S)_PROXY from the env.
           ...(opts.proxy ? [] : ["--no-proxy-server"]),
           `--lang=${languages[0]}`,
