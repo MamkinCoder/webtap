@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ZodType } from "zod";
-import type { ActResult, BrowserLauncher, BrowserOptions, BrowserSession, Cookie, Observed, PageFetchResult } from "../types.js";
+import type { ActResult, BrowserLauncher, BrowserOptions, BrowserSession, Cookie, Observed, PageFetchResult, PersonaOs } from "../types.js";
 import { RawCdp } from "./cdp.js";
 import { ensureDisplay, findChrome, onVirtualDisplay } from "./launcher.js";
 import { chromiumTreeRssMB, killChromiumLeftovers } from "./memory.js";
@@ -59,6 +59,36 @@ export function setPreference(userDataDir: string, path: string[], value: unknow
   node[last] = value;
   mkdirSync(join(userDataDir, "Default"), { recursive: true });
   writeFileSync(file, JSON.stringify(prefs));
+}
+
+/** The reduced user agent and client hints of Chrome `major` on `os`, as that Chrome sends them. */
+export function personaFor(os: PersonaOs, major: string) {
+  const win = os === "windows";
+  return {
+    userAgent: `Mozilla/5.0 (${win ? "Windows NT 10.0; Win64; x64" : "Macintosh; Intel Mac OS X 10_15_7"}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
+    platform: win ? "Win32" : "MacIntel",
+    metadata: win
+      ? { platform: "Windows", platformVersion: "15.0.0", architecture: "x86", bitness: "64", model: "", mobile: false, wow64: false }
+      : { platform: "macOS", platformVersion: "15.5.0", architecture: "arm", bitness: "64", model: "", mobile: false, wow64: false },
+  };
+}
+
+/**
+ * Makes this tab present `os`: user agent, Sec-CH-UA client hints and navigator.platform (Emulation, no domain to
+ * enable, nothing the page can see being set). The version is this Chrome's own (Browser.getVersion) and the brand
+ * list is left to Chrome, so only the OS differs from what the binary would say. (userAgentData can't be read on
+ * about:blank: it exists in secure contexts only.)
+ */
+async function presentOs(cdp: RawCdp, sessionId: string, os: PersonaOs): Promise<void> {
+  const { product } = await cdp.send<{ product: string }>("Browser.getVersion");
+  const fullVersion = /\/(\d+\.\d+\.\d+\.\d+)/.exec(product)?.[1];
+  if (!fullVersion) throw new Error(`clean engine: no Chrome version in "${product}"`);
+  const p = personaFor(os, fullVersion.split(".")[0]!);
+  const override = { userAgent: p.userAgent, platform: p.platform, userAgentMetadata: { fullVersion, ...p.metadata } };
+  // Workers inherit the user agent, but not the platform: CDP can't change a worker's navigator.platform (an override
+  // sent to the worker itself is accepted and ignored), so a worker still reports the real OS. Avito's firewall let
+  // this exact setup through (2026-10-03).
+  await cdp.send("Emulation.setUserAgentOverride", override, sessionId);
 }
 
 export function createCleanLauncher(): BrowserLauncher & { launch(opts: CleanLaunchOptions): Promise<BrowserSession> } {
@@ -108,8 +138,9 @@ export function createCleanLauncher(): BrowserLauncher & { launch(opts: CleanLau
           ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
           ...(headless ? ["--headless=new"] : []),
           // Always on-screen: an off-screen window (screenX -32000) is itself a bot tell Avito acts on.
-          ...(opts.userAgent ? [`--user-agent=${opts.userAgent}`] : []),
-          opts.startUrl ?? "about:blank",
+          ...(opts.userAgent && !opts.os ? [`--user-agent=${opts.userAgent}`] : []),
+          // With a persona the site waits: its first request must already carry the presented OS.
+          opts.os ? "about:blank" : (opts.startUrl ?? "about:blank"),
         ];
         // Linux Chrome takes its UI locale (Intl's default: dates, numbers) from the environment, not from --lang; a
         // server's bare env gives en-US next to Russian Accept-Language.
@@ -141,6 +172,10 @@ export function createCleanLauncher(): BrowserLauncher & { launch(opts: CleanLau
         if (opts.blockUrls?.length) {
           await cdp.send("Network.enable", {}, sessionId);
           await cdp.send("Network.setBlockedURLs", { urls: opts.blockUrls }, sessionId);
+        }
+        if (opts.os) {
+          await presentOs(cdp, sessionId, opts.os);
+          if (opts.startUrl) await cdp.send("Page.navigate", { url: opts.startUrl }, sessionId);
         }
         return new CleanSession(cdp, sessionId, opts, cleanup);
       } catch (err) {

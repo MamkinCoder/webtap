@@ -1,7 +1,7 @@
 // What an integration is: a site with named endpoints. Each endpoint has a typed input and output and an ordered list
 // of strategies (cheapest first); the runtime runs the first one that returns valid output, from a healthy identity.
 import type { z, ZodType } from "zod";
-import type { BrowserSession, ProxyConfig } from "../types.js";
+import type { BrowserSession, PersonaOs, ProxyConfig } from "../types.js";
 
 export type StrategyKind = "http" | "page-fetch" | "browser";
 
@@ -12,6 +12,12 @@ export interface Identity {
   proxy?: ProxyConfig;
   userAgent?: string;
   languages?: string[];
+  /**
+   * Clean engine: the OS this identity's Chrome presents (user agent, Sec-CH-UA client hints, navigator.platform),
+   * set before the first page loads. A Linux server's Chrome as Windows: Avito's firewall (2026-10) offered its
+   * proof-of-work at once to a Windows Chrome and not at all to the same Chrome as Linux. Omitted: the real OS.
+   */
+  os?: PersonaOs;
   /** A url that gives the proxy a new exit IP (mobile proxies have one). Called on a ban instead of a long quarantine. */
   rotateUrl?: string;
 }

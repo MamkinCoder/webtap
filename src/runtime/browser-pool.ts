@@ -119,6 +119,7 @@ export class BrowserPool {
       ...(this.o.executablePath ? { executablePath: this.o.executablePath } : {}),
       ...(identity.proxy ? { proxy: identity.proxy } : {}),
       ...(identity.userAgent ? { userAgent: identity.userAgent } : {}),
+      ...(identity.os ? { os: identity.os } : {}),
       ...(identity.languages ? { languages: identity.languages } : {}),
       ...(site.browser?.blockAssets !== undefined ? { blockAssets: site.browser.blockAssets } : { blockAssets: true }),
       ...(site.browser?.loadImages !== undefined ? { loadImages: site.browser.loadImages } : {}),

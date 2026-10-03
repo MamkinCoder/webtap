@@ -9,6 +9,9 @@ export interface ProxyConfig {
   password?: string;
 }
 
+/** An OS the clean engine can present: what a person's desktop Chrome most likely runs on. */
+export type PersonaOs = "windows" | "mac";
+
 export interface BrowserOptions {
   /** Chrome / Chromium binary. Omitted: the usual install locations (findChrome()), then Stagehand's own lookup. */
   executablePath?: string;
@@ -20,6 +23,8 @@ export interface BrowserOptions {
   userDataDir: string;
   /** Override the derived desktop UA. Default: Chrome's reduced UA for this build (never "HeadlessChrome"). */
   userAgent?: string;
+  /** Clean engine: present this OS (UA, client hints, navigator.platform) instead of the real one. See Identity.os. */
+  os?: PersonaOs;
   /** Where snapshot() writes its html/png/url bundles. */
   snapshotDir: string;
   /** Action cache shared by every session of a runtime. Omitted: a memory-only cache for this session. */
