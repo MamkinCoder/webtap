@@ -91,6 +91,11 @@ export function createCleanLauncher(): BrowserLauncher & { launch(opts: CleanLau
         }
         if (!targetId) throw new Error("clean engine: no page target");
         const { sessionId } = await cdp.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
+        // Blocking ads/video saves proxy traffic. The Network domain is invisible to the page (unlike Runtime).
+        if (opts.blockUrls?.length) {
+          await cdp.send("Network.enable", {}, sessionId);
+          await cdp.send("Network.setBlockedURLs", { urls: opts.blockUrls }, sessionId);
+        }
         return new CleanSession(cdp, sessionId, opts, cleanup);
       } catch (err) {
         for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(() => undefined);

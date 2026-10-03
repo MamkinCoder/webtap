@@ -32,6 +32,8 @@ export declare class IdentityPool {
      */
     acquire(siteId: string, o: AcquireOptions): Promise<Identity | null>;
     report(siteId: string, identityId: string, outcome: "ok" | "banned" | "changed" | "error", banCooldownMs: number): void;
+    /** Holds the identity's next slot for this site at least `ms` away (e.g. while a rotated proxy reconnects). */
+    pause(siteId: string, identityId: string, ms: number): void;
     /** Why acquire() returned null: true when every identity is quarantined for this site. */
     allQuarantined(siteId: string, proxyOnly?: boolean): boolean;
     status(): IdentitySiteStatus[];

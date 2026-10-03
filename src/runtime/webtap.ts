@@ -51,6 +51,8 @@ export interface WebtapOptions {
   launcher?: BrowserLauncher;
   /** Custom launcher for clean-engine sites. */
   cleanLauncher?: BrowserLauncher;
+  /** Pause after rotating a proxy's IP before the call retries on it. Default 15000. */
+  rotatePauseMs?: number;
 }
 
 export interface Attempt {
@@ -111,13 +113,16 @@ export interface Webtap {
   health(): HealthReport;
   /** Runs every endpoint's canary (or only `site`'s). perStrategy: test each strategy alone instead of the fallback chain. */
   runCanaries(opts?: { site?: string; perStrategy?: boolean }): Promise<Record<string, CanaryResult>>;
+  /** Opens the sessions of keepWarm sites now (their primary identity) and starts their keep-alive visits. */
+  warm(): Promise<void>;
   close(): Promise<void>;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MIN_INTERVAL_MS = 1_000;
 const DEFAULT_BAN_COOLDOWN_MS = 10 * 60_000;
-const ROTATED_COOLDOWN_MS = 15_000;
+const ROTATE_PAUSE_MS = 15_000;
+const KEEP_WARM_EVERY_MS = 4 * 60_000;
 
 /** Calls a proxy's IP-change url; true when it answered 2xx. */
 async function rotateIp(url: string): Promise<boolean> {
@@ -159,7 +164,9 @@ export function createWebtap(opts: WebtapOptions): Webtap {
   const siteGates = new Map<string, Gate>();
   const dispatchers = new Map<string, Dispatcher>();
   const maxIdentityAttempts = Math.max(1, opts.maxIdentityAttempts ?? 3);
-  const maxWaitMs = opts.maxWaitMs ?? 15_000;
+  const rotatePauseMs = opts.rotatePauseMs ?? ROTATE_PAUSE_MS;
+  // A call that rotated must be able to wait out the reconnect pause for its retry.
+  const maxWaitMs = Math.max(opts.maxWaitMs ?? 15_000, rotatePauseMs + 1_000);
   const emit = (e: WebtapEvent) => {
     try {
       opts.onEvent?.(e);
@@ -247,6 +254,8 @@ export function createWebtap(opts: WebtapOptions): Webtap {
         }
         const tried = new Set<string>();
         let errors = 0;
+        /** Identities this call already retried on a fresh IP: one retry each, so one call never burns a pool of IPs. */
+        const retriedAfterRotate = new Set<string>();
         for (let i = 0; i < maxIdentityAttempts && !signal.aborted; i++) {
           const proxyOnly = !!site.requireProxy;
           const identity = await identities.acquire(site.id, { minIntervalMs, exclude: tried, maxWaitMs, signal, proxyOnly }).catch(() => null);
@@ -298,7 +307,15 @@ export function createWebtap(opts: WebtapOptions): Webtap {
           // A rotatable proxy gets a new IP instead of a long quarantine: a short pause, then it is usable again.
           const rotated = outcome === "banned" && identity.rotateUrl ? await rotateIp(identity.rotateUrl) : false;
           if (rotated) message = `${message}; rotated the proxy IP`;
-          identities.report(site.id, identity.id, outcome, rotated ? ROTATED_COOLDOWN_MS : banCooldownMs);
+          // Rotated: no quarantine, just a pause while the modem reconnects; the same call retries on the fresh IP.
+          identities.report(site.id, identity.id, outcome, rotated ? 0 : banCooldownMs);
+          if (rotated) {
+            identities.pause(site.id, identity.id, rotatePauseMs);
+            if (!retriedAfterRotate.has(identity.id)) {
+              retriedAfterRotate.add(identity.id);
+              tried.delete(identity.id);
+            }
+          }
           stats.attempt(site.id, endpointName, strategy.name, outcome, ms, message);
           record({ strategy: strategy.name, identity: identity.id, outcome, message, ms });
           if (outcome === "changed") {
@@ -310,7 +327,7 @@ export function createWebtap(opts: WebtapOptions): Webtap {
             break;
           }
           // A first transient error may retry on the same identity (after its rate-limit gap) when it is the only one
-          // left; a ban never does.
+          // left; a ban only does after rotating the proxy's IP (above).
           if (outcome === "error" && identities.identities.every((x) => tried.has(x.id) || (site.requireProxy && !x.proxy))) tried.delete(identity.id);
           // banned (or a first error): same strategy, another identity when there is one
         }
@@ -328,6 +345,35 @@ export function createWebtap(opts: WebtapOptions): Webtap {
     stats.call(site.id, endpointName, true, result.primary, result.strategy);
     emit({ type: "call", site: site.id, endpoint: endpointName, ok: true, strategy: result.strategy, ms });
     return { data: result.data, site: site.id, endpoint: endpointName, strategy: result.strategy, identity: result.identity, ms, attempts };
+  }
+
+  // ── Keeping sessions warm ──
+  let keepAliveTimer: NodeJS.Timeout | undefined;
+  const warmSites = () => [...sites.values()].filter((s) => s.browser?.keepWarm);
+  /** The site's primary identity: the first one it may use. */
+  const primaryIdentity = (site: SiteDef): Identity | undefined => identities.identities.find((i) => !site.requireProxy || i.proxy);
+  /** Opens the session (initial) or revisits the site when the session has been idle for the keep-alive period. */
+  async function keepAlive(site: SiteDef, initial: boolean): Promise<void> {
+    const identity = primaryIdentity(site);
+    if (!identity) return;
+    const every = site.browser?.keepWarm?.everyMs ?? KEEP_WARM_EVERY_MS;
+    const idle = pool.idleFor(identity, site);
+    if (!initial && (idle === undefined || idle < every)) return; // busy, closed, or recently used
+    if (initial && idle !== undefined) return; // already open
+    // Take a regular rate-limit slot so a keep-alive never lands right on top of a real call.
+    const got = await identities.acquire(site.id, { minIntervalMs: site.rateLimit?.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS, maxWaitMs: initial ? 30_000 : 0, exclude: new Set(identities.identities.filter((i) => i.id !== identity.id).map((i) => i.id)) }).catch(() => null);
+    if (!got) return;
+    let lease: Lease | undefined;
+    let broken = false;
+    try {
+      lease = await pool.lease(identity, site);
+      const url = new URL(site.browser?.keepWarm?.url ?? "/", site.origin).toString();
+      if (!initial) await lease.session.goto(url); // a fresh session already opened the site itself
+    } catch {
+      broken = true;
+    } finally {
+      await lease?.release(broken).catch(() => undefined);
+    }
   }
 
   return {
@@ -388,7 +434,16 @@ export function createWebtap(opts: WebtapOptions): Webtap {
       return results;
     },
 
+    async warm() {
+      await Promise.allSettled(warmSites().map((site) => keepAlive(site, true)));
+      keepAliveTimer ??= setInterval(() => {
+        for (const site of warmSites()) void keepAlive(site, false);
+      }, 30_000);
+      keepAliveTimer.unref();
+    },
+
     async close() {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
       await pool.close();
       await Promise.allSettled([...dispatchers.values()].map((d) => d.close()));
     },

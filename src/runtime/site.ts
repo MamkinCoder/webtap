@@ -82,7 +82,12 @@ export interface SiteDef {
     blockAssets?: boolean;
     loadImages?: boolean;
     headless?: boolean;
+    /** URL patterns (Network.setBlockedURLs) never loaded, e.g. ad networks and video: less traffic through a proxy. */
     blockUrls?: string[];
+    /** Keep this site's sessions open for good (no idle close), open them at startup (webtap.warm()) and revisit the
+     * site's page when idle so cookies stay fresh. Costs one Chrome per identity; saves the cold start and the
+     * site's challenge on every call. */
+    keepWarm?: { everyMs?: number; url?: string };
   };
   endpoints: Record<string, Endpoint>;
 }

@@ -28,6 +28,8 @@ interface Entry {
   busy: boolean;
   lastUsed: number;
   idleTimer?: NodeJS.Timeout;
+  /** Never closed for being idle (site.browser.keepWarm). */
+  keepWarm: boolean;
 }
 
 export interface Lease {
@@ -58,7 +60,7 @@ export class BrowserPool {
       if (existing && !existing.busy) return this.take(existing);
       if (!existing) {
         if (this.entries.size < this.max) {
-          const entry: Entry = { key, session: this.launch(identity, site), busy: false, lastUsed: Date.now() };
+          const entry: Entry = { key, session: this.launch(identity, site), busy: false, lastUsed: Date.now(), keepWarm: !!site.browser?.keepWarm };
           this.entries.set(key, entry);
           entry.session.catch(() => this.entries.get(key) === entry && this.entries.delete(key));
           return this.take(entry);
@@ -92,7 +94,7 @@ export class BrowserPool {
         entry.lastUsed = Date.now();
         if (broken || this.closed) {
           await this.drop(entry);
-        } else {
+        } else if (!entry.keepWarm) {
           entry.idleTimer = setTimeout(() => void this.drop(entry), this.o.idleMs ?? 10 * 60_000);
           entry.idleTimer.unref();
         }
@@ -127,7 +129,8 @@ export class BrowserPool {
   /** Closes the least recently used idle session; false when every session is busy. */
   private async evictIdle(): Promise<boolean> {
     let lru: Entry | undefined;
-    for (const e of this.entries.values()) if (!e.busy && (!lru || e.lastUsed < lru.lastUsed)) lru = e;
+    // Ordinary sessions go first; a kept-warm one only when nothing else is idle.
+    for (const e of this.entries.values()) if (!e.busy && (!lru || Number(e.keepWarm) < Number(lru.keepWarm) || (e.keepWarm === lru.keepWarm && e.lastUsed < lru.lastUsed))) lru = e;
     if (!lru) return false;
     await this.drop(lru);
     return true;
@@ -146,6 +149,12 @@ export class BrowserPool {
 
   private wake(): void {
     for (const w of this.waiters.splice(0)) w();
+  }
+
+  /** Milliseconds since this session was last released; undefined when there is none or it is in use. */
+  idleFor(identity: Identity, site: SiteDef): number | undefined {
+    const e = this.entries.get(`${identity.id}\u0000${site.id}`);
+    return e && !e.busy ? Date.now() - e.lastUsed : undefined;
   }
 
   get size(): number {

@@ -106,6 +106,12 @@ export class IdentityPool {
     s.quarantinedUntil = this.now() + Math.min(MAX_QUARANTINE_MS, banCooldownMs * 2 ** (s.consecutiveBans - 1));
   }
 
+  /** Holds the identity's next slot for this site at least `ms` away (e.g. while a rotated proxy reconnects). */
+  pause(siteId: string, identityId: string, ms: number): void {
+    const s = this.slot(identityId, siteId);
+    s.nextAt = Math.max(s.nextAt, this.now() + ms);
+  }
+
   /** Why acquire() returned null: true when every identity is quarantined for this site. */
   allQuarantined(siteId: string, proxyOnly = false): boolean {
     const t = this.now();

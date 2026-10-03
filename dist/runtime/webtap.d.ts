@@ -31,6 +31,8 @@ export interface WebtapOptions {
     launcher?: BrowserLauncher;
     /** Custom launcher for clean-engine sites. */
     cleanLauncher?: BrowserLauncher;
+    /** Pause after rotating a proxy's IP before the call retries on it. Default 15000. */
+    rotatePauseMs?: number;
 }
 export interface Attempt {
     strategy: string;
@@ -96,6 +98,8 @@ export interface Webtap {
         site?: string;
         perStrategy?: boolean;
     }): Promise<Record<string, CanaryResult>>;
+    /** Opens the sessions of keepWarm sites now (their primary identity) and starts their keep-alive visits. */
+    warm(): Promise<void>;
     close(): Promise<void>;
 }
 export declare function createWebtap(opts: WebtapOptions): Webtap;

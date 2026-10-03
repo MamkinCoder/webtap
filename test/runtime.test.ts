@@ -125,10 +125,13 @@ describe("fallback and outcomes", () => {
       launcher: noBrowser,
       identities: [{ id: "mobile", proxy: { server: "http://127.0.0.1:1" }, rotateUrl }],
       sites: [siteWith([fake("api", () => Promise.reject(banned("429")))])],
+      rotatePauseMs: 100,
     });
     try {
-      await wt.call("shop", "search", { q: "x" }).catch(() => undefined);
-      expect(rotations).toBe(1);
+      const err = await wt.call("shop", "search", { q: "x" }).catch((e: unknown) => e);
+      // Banned → new IP → the same call retries once on it → banned again → new IP, and no third try.
+      expect(rotations).toBe(2);
+      expect((err as WebtapError).attempts.filter((a) => a.outcome === "banned")).toHaveLength(2);
       const st = wt.health().identities.find((s) => s.identity === "mobile");
       expect(st?.quarantinedForMs).toBeLessThanOrEqual(15_000);
     } finally {

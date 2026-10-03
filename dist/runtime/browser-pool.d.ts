@@ -35,6 +35,8 @@ export declare class BrowserPool {
     private evictIdle;
     private drop;
     private wake;
+    /** Milliseconds since this session was last released; undefined when there is none or it is in use. */
+    idleFor(identity: Identity, site: SiteDef): number | undefined;
     get size(): number;
     close(): Promise<void>;
 }
