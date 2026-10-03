@@ -3,6 +3,8 @@ import type { BrowserLauncher, WebtapLLM } from "../types.js";
  * the life of the process and points DISPLAY at it; Chrome inherits the env. False when there is no display and no
  * Xvfb: the caller falls back to headless. */
 export declare function ensureDisplay(): Promise<boolean>;
+/** True when Chrome draws on the Xvfb screen webtap started (a server without a GPU), not on a real display. */
+export declare function onVirtualDisplay(): boolean;
 /** The first installed Chrome / Chromium in the usual places. Needed up front: the desktop user agent is derived from
  * the binary's version, and without it headless Chrome says "HeadlessChrome" (anti-bot checks reject it). */
 export declare function findChrome(): string | undefined;

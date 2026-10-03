@@ -36,6 +36,8 @@ const CHROMIUM_ARGS = [
 ];
 const XVFB = "/usr/bin/Xvfb";
 const XVFB_DISPLAY = ":99";
+const XVFB_SCREEN = { width: 1920, height: 1080 };
+const XPROP = "/usr/bin/xprop";
 let xvfbStarted;
 /** A visible (headful) Chrome needs a screen. On a Linux box without one this starts one virtual screen, Xvfb, for
  * the life of the process and points DISPLAY at it; Chrome inherits the env. False when there is no display and no
@@ -46,7 +48,7 @@ export function ensureDisplay() {
     if (!existsSync(XVFB))
         return Promise.resolve(false);
     xvfbStarted ??= (async () => {
-        const child = spawn(XVFB, [XVFB_DISPLAY, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], { stdio: "ignore", detached: false });
+        const child = spawn(XVFB, [XVFB_DISPLAY, "-screen", "0", `${XVFB_SCREEN.width}x${XVFB_SCREEN.height}x24`, "-nolisten", "tcp", "-noreset"], { stdio: "ignore", detached: false });
         child.unref();
         let exited = false;
         child.once("exit", () => {
@@ -59,9 +61,24 @@ export function ensureDisplay() {
         if (exited)
             return false;
         process.env.DISPLAY = XVFB_DISPLAY;
+        // A bare Xvfb has no desktop panel, so screen.avail* equals screen.* (anti-bot scripts read that as "no
+        // taskbar": a headless tell). Reserve a 32px bottom panel the way a desktop's window manager does (needs xprop;
+        // -noreset above keeps the property when the last client disconnects).
+        if (existsSync(XPROP)) {
+            try {
+                execFileSync(XPROP, ["-root", "-f", "_NET_WORKAREA", "32c", "-set", "_NET_WORKAREA", `0,0,${XVFB_SCREEN.width},${XVFB_SCREEN.height - 32}`], { timeout: 5_000, stdio: "ignore" });
+            }
+            catch {
+                // cosmetic: Chrome then reports the whole screen as available
+            }
+        }
         return true;
     })();
     return xvfbStarted;
+}
+/** True when Chrome draws on the Xvfb screen webtap started (a server without a GPU), not on a real display. */
+export function onVirtualDisplay() {
+    return process.platform === "linux" && process.env.DISPLAY === XVFB_DISPLAY;
 }
 const CHROME_CANDIDATES = {
     darwin: [
