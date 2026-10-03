@@ -1,6 +1,10 @@
 // Small pure pieces: identity pool, breaker, response classification, JSON extraction, the action cache's heal lock.
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ActionCache } from "../src/browser/cache.js";
+import { localeEnv, setPreference } from "../src/browser/clean.js";
 import { extractJson } from "../src/llm/json.js";
 import { Breaker } from "../src/runtime/health.js";
 import { IdentityPool } from "../src/runtime/identity.js";
@@ -152,5 +156,24 @@ describe("ActionCache.heal", () => {
     expect(await second).toEqual({ ran: false });
     expect(runs).toBe(1);
     expect(cache.get("shop.ru", "search.submit")?.selector).toBe("//button");
+  });
+});
+
+describe("clean engine profile + env", () => {
+  it("maps a BCP 47 tag to LANG/LANGUAGE", () => {
+    expect(localeEnv("ru-RU")).toEqual({ LANG: "ru_RU.UTF-8", LANGUAGE: "ru_RU:ru" });
+    expect(localeEnv("en")).toEqual({ LANG: "en.UTF-8", LANGUAGE: "en" });
+    expect(localeEnv("")).toEqual({});
+  });
+
+  it("sets one preference and keeps the rest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "webtap-prefs-"));
+    setPreference(dir, ["webrtc", "ip_handling_policy"], "disable_non_proxied_udp");
+    const file = join(dir, "Default", "Preferences");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ webrtc: { ip_handling_policy: "disable_non_proxied_udp" } });
+    mkdirSync(join(dir, "Default"), { recursive: true });
+    writeFileSync(file, JSON.stringify({ profile: { name: "x" }, webrtc: { other: 1 } }));
+    setPreference(dir, ["webrtc", "ip_handling_policy"], "disable_non_proxied_udp");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ profile: { name: "x" }, webrtc: { other: 1, ip_handling_policy: "disable_non_proxied_udp" } });
   });
 });

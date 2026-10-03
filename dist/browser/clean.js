@@ -14,13 +14,44 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { RawCdp } from "./cdp.js";
-import { ensureDisplay, findChrome } from "./launcher.js";
+import { ensureDisplay, findChrome, onVirtualDisplay } from "./launcher.js";
 import { chromiumTreeRssMB, killChromiumLeftovers } from "./memory.js";
 import { startProxyRelay } from "./proxy-relay.js";
 import { RESOLVE_JS, TEXT_JS, fillJs, pageFetchJs } from "./session.js";
 const DEFAULT_VIEWPORT = { width: 1366, height: 850 };
 const DEFAULT_LANGUAGES = ["ru-RU", "ru", "en-US", "en"];
 const unsupported = (what) => Promise.reject(new Error(`${what} needs the Stagehand engine; this site runs on the clean engine (goto + evaluate only)`));
+/** LANG / LANGUAGE for a BCP 47 tag: "ru-RU" → ru_RU.UTF-8 and ru_RU:ru. */
+export function localeEnv(tag) {
+    const m = /^([a-z]{2,3})(?:-([A-Z]{2}))?/.exec(tag ?? "");
+    if (!m)
+        return {};
+    const posix = m[2] ? `${m[1]}_${m[2]}` : m[1];
+    return { LANG: `${posix}.UTF-8`, LANGUAGE: m[2] ? `${posix}:${m[1]}` : posix };
+}
+/** Sets one value in the profile's Default/Preferences before Chrome starts (Chrome keeps the other keys). */
+export function setPreference(userDataDir, path, value) {
+    const file = join(userDataDir, "Default", "Preferences");
+    let prefs = {};
+    try {
+        prefs = JSON.parse(readFileSync(file, "utf8"));
+    }
+    catch {
+        // new or unreadable profile: start from scratch
+    }
+    let node = prefs;
+    for (const key of path.slice(0, -1)) {
+        if (typeof node[key] !== "object" || node[key] === null)
+            node[key] = {};
+        node = node[key];
+    }
+    const last = path[path.length - 1];
+    if (node[last] === value)
+        return;
+    node[last] = value;
+    mkdirSync(join(userDataDir, "Default"), { recursive: true });
+    writeFileSync(file, JSON.stringify(prefs));
+}
 export function createCleanLauncher() {
     return {
         async launch(opts) {
@@ -43,15 +74,25 @@ export function createCleanLauncher() {
                         proxyServer = opts.proxy.server;
                 }
                 mkdirSync(opts.userDataDir, { recursive: true });
+                // WebRTC sends STUN over UDP straight past an HTTP proxy, so a page sees the machine's own IP next to the
+                // proxy's (on a server: a datacenter IP behind a mobile one). Keep WebRTC on the proxy, as uBlock does.
+                if (proxyServer)
+                    setPreference(opts.userDataDir, ["webrtc", "ip_handling_policy"], "disable_non_proxied_udp");
                 const portFile = join(opts.userDataDir, "DevToolsActivePort");
                 rmSync(portFile, { force: true });
                 const args = [
                     `--user-data-dir=${opts.userDataDir}`,
                     "--remote-debugging-port=0",
+                    // Chrome sets navigator.webdriver=true whenever a debugging port is open. The price is the "unsupported
+                    // command-line flag" infobar, which many real browsers show in some form; webdriver=true none do.
+                    "--disable-blink-features=AutomationControlled",
                     "--no-first-run",
                     "--no-default-browser-check",
                     "--disable-background-networking",
                     "--disable-sync",
+                    // No GPU on the Xvfb screen: Chrome then turns WebGL off altogether (no real browser lacks it). Mesa's
+                    // software renderer (llvmpipe) instead, as on a Linux VM.
+                    ...(!headless && onVirtualDisplay() ? ["--ignore-gpu-blocklist", "--use-angle=gl"] : []),
                     `--lang=${languages[0]}`,
                     `--accept-lang=${languages.join(",")}`,
                     `--window-size=${viewport.width},${viewport.height}`,
@@ -63,7 +104,15 @@ export function createCleanLauncher() {
                     ...(opts.userAgent ? [`--user-agent=${opts.userAgent}`] : []),
                     opts.startUrl ?? "about:blank",
                 ];
-                const child = spawn(executable, args, { stdio: "ignore" });
+                // Linux Chrome takes its UI locale (Intl's default: dates, numbers) from the environment, not from --lang; a
+                // server's bare env gives en-US next to Russian Accept-Language.
+                const env = { ...process.env };
+                if (process.platform === "linux") {
+                    delete env.LC_ALL; // would override LANG/LANGUAGE
+                    delete env.LC_MESSAGES;
+                    Object.assign(env, localeEnv(languages[0]));
+                }
+                const child = spawn(executable, args, { stdio: "ignore", env });
                 cleanup.push(() => void child.kill("SIGTERM"));
                 for (let i = 0; i < 150 && !existsSync(portFile); i++)
                     await sleep(100);
