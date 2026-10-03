@@ -120,6 +120,8 @@ export class BrowserPool {
       ...(identity.proxy ? { proxy: identity.proxy } : {}),
       ...(identity.userAgent ? { userAgent: identity.userAgent } : {}),
       ...(identity.os ? { os: identity.os } : {}),
+      // A remote browser serves the identity's clean-engine sites, a tab each; Stagehand needs a Chrome of its own.
+      ...(clean && identity.remote ? { remote: identity.remote } : {}),
       ...(identity.languages ? { languages: identity.languages } : {}),
       ...(site.browser?.blockAssets !== undefined ? { blockAssets: site.browser.blockAssets } : { blockAssets: true }),
       ...(site.browser?.loadImages !== undefined ? { loadImages: site.browser.loadImages } : {}),

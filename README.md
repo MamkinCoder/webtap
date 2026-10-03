@@ -86,6 +86,24 @@ Proxies with credentials work on both engines (a local relay adds them; Stagehan
 Each (identity, site) pair keeps a warm Chromium with a persistent profile, so solved challenges survive between calls
 and restarts. `browser.maxSessions` caps concurrent Chromium processes; idle sessions close after `browser.idleMs`.
 
+### A browser that runs elsewhere
+
+An identity with `remote` has its clean-engine sites drive an already-running browser over its DevTools port instead
+of starting Chrome: a stealth build in a container of its own, for instance, that the app should not host or trust.
+
+```ts
+{ id: "phone", proxy: { server: "http://127.0.0.1:18118" }, remote: { cdpUrl: "http://stealth-browser:9222", nativePersona: true } }
+```
+
+Each session gets a fresh tab (leftover tabs are closed, never a live session's), readied as a local one is: URL
+blocking, then the site as a `Page.navigate` from `about:blank`, no `Runtime.enable`. The browser's own flags decide its
+proxy (it must be the identity's exit; `proxy` still serves the plain-HTTP strategies), languages and window;
+`nativePersona` skips the user-agent override for a build that presents an OS of its own. Closing or dropping a
+session only disconnects: the browser and its profile live on, and the next session replaces the tab.
+`wipeRemoteBrowser(cdpUrl, origins)` is the profile wipe (cookies, storage, HTTP cache), e.g. after rotating the exit
+IP. A host name in `cdpUrl` is resolved to its address first: Chrome's DevTools server only answers a Host header that
+is an IP or `localhost`. Stagehand-engine sites on the same identity still start their own Chrome.
+
 ## Defining a site
 
 ```ts

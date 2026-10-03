@@ -137,7 +137,9 @@ async function rotateIp(url: string): Promise<boolean> {
   }
 }
 
-const BROWSER_BROKEN = /target closed|session closed|browser has been closed|disconnected|websocket|crash|ECONNREFUSED/i;
+// "connection closed": the clean engine's CDP socket (Chrome died, a remote browser restarted); "session with given
+// id": its tab was closed under it (wipeRemoteBrowser).
+const BROWSER_BROKEN = /target closed|session closed|browser has been closed|disconnected|websocket|crash|ECONNREFUSED|connection closed|session with given id/i;
 
 export function createWebtap(opts: WebtapOptions): Webtap {
   const sites = new Map<string, SiteDef>();

@@ -1,7 +1,7 @@
 // What an integration is: a site with named endpoints. Each endpoint has a typed input and output and an ordered list
 // of strategies (cheapest first); the runtime runs the first one that returns valid output, from a healthy identity.
 import type { z, ZodType } from "zod";
-import type { BrowserSession, PersonaOs, ProxyConfig } from "../types.js";
+import type { BrowserSession, PersonaOs, ProxyConfig, RemoteBrowser } from "../types.js";
 
 export type StrategyKind = "http" | "page-fetch" | "browser";
 
@@ -18,6 +18,13 @@ export interface Identity {
    * proof-of-work at once to a Windows Chrome and not at all to the same Chrome as Linux. Omitted: the real OS.
    */
   os?: PersonaOs;
+  /**
+   * Clean-engine sites drive this already-running browser (another container, a stealth build) instead of starting
+   * Chrome: one tab per site session, in the browser's own profile, behind its own proxy and persona. That proxy must
+   * be this identity's exit too (`proxy` here still serves the plain-HTTP strategies). Stagehand-engine sites keep
+   * starting their own Chrome. Dropping a session never closes the browser; wipeRemoteBrowser() is its profile wipe.
+   */
+  remote?: RemoteBrowser;
   /** A url that gives the proxy a new exit IP (mobile proxies have one). Called on a ban instead of a long quarantine. */
   rotateUrl?: string;
 }

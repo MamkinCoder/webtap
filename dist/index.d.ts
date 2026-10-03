@@ -13,6 +13,7 @@ export { createServer } from "./server.js";
 export type { ServerOptions } from "./server.js";
 export { createLauncher, desktopUserAgent, findChrome } from "./browser/launcher.js";
 export { createCleanLauncher } from "./browser/clean.js";
+export { wipeRemoteBrowser } from "./browser/remote.js";
 export { ActionCache } from "./browser/cache.js";
 export type * from "./types.js";
 export { mapSite } from "./mapper/index.js";

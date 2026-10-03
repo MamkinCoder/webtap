@@ -9,16 +9,18 @@
 //     Page.navigate, Runtime.evaluate, Input.dispatchKeyEvent, Page.captureScreenshot.
 // No Stagehand, so no natural-language act/extract/observe: sites on this engine use goto + evaluate (+ fetch).
 // Windows are always on-screen (an off-screen window is a bot tell): on a server that is the Xvfb display.
+// An identity with `remote` gets a tab in a browser that runs elsewhere instead (./remote.ts), driven the same way.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ZodType } from "zod";
-import type { ActResult, BrowserLauncher, BrowserOptions, BrowserSession, Cookie, Observed, PageFetchResult, PersonaOs } from "../types.js";
+import type { ActResult, BrowserLauncher, BrowserOptions, BrowserSession, Cookie, Observed, PageFetchResult, PersonaOs, RemoteBrowser } from "../types.js";
 import { RawCdp } from "./cdp.js";
 import { ensureDisplay, findChrome, onVirtualDisplay } from "./launcher.js";
 import { chromiumTreeRssMB, killChromiumLeftovers } from "./memory.js";
 import { startProxyRelay } from "./proxy-relay.js";
+import { browserWsUrl, openRemoteTab } from "./remote.js";
 import { RESOLVE_JS, TEXT_JS, fillJs, pageFetchJs } from "./session.js";
 
 const DEFAULT_VIEWPORT = { width: 1366, height: 850 } as const;
@@ -94,6 +96,7 @@ async function presentOs(cdp: RawCdp, sessionId: string, os: PersonaOs): Promise
 export function createCleanLauncher(): BrowserLauncher & { launch(opts: CleanLaunchOptions): Promise<BrowserSession> } {
   return {
     async launch(opts: CleanLaunchOptions): Promise<BrowserSession> {
+      if (opts.remote) return launchRemote(opts, opts.remote);
       const cleanup: (() => Promise<void> | void)[] = [];
       try {
         const executable = opts.executablePath || findChrome();
@@ -168,22 +171,47 @@ export function createCleanLauncher(): BrowserLauncher & { launch(opts: CleanLau
         }
         if (!targetId) throw new Error("clean engine: no page target");
         const { sessionId } = await cdp.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
-        // Blocking ads/video saves proxy traffic. The Network domain is invisible to the page (unlike Runtime).
-        if (opts.blockUrls?.length) {
-          await cdp.send("Network.enable", {}, sessionId);
-          await cdp.send("Network.setBlockedURLs", { urls: opts.blockUrls }, sessionId);
-        }
-        if (opts.os) {
-          await presentOs(cdp, sessionId, opts.os);
-          if (opts.startUrl) await cdp.send("Page.navigate", { url: opts.startUrl }, sessionId);
-        }
-        return new CleanSession(cdp, sessionId, opts, cleanup);
+        // With a persona Chrome opened about:blank: the site comes after the override.
+        await prepareTab(cdp, sessionId, opts, opts.os, !!opts.os);
+        return new CleanSession(cdp, sessionId, opts, cleanup, false);
       } catch (err) {
         for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(() => undefined);
         throw err;
       }
     },
   };
+}
+
+/** Readies an attached tab: URL blocking, the persona, then (navigate) the site's first page. */
+async function prepareTab(cdp: RawCdp, sessionId: string, opts: CleanLaunchOptions, os: PersonaOs | undefined, navigate: boolean): Promise<void> {
+  // Blocking ads/video saves proxy traffic. The Network domain is invisible to the page (unlike Runtime).
+  if (opts.blockUrls?.length) {
+    await cdp.send("Network.enable", {}, sessionId);
+    await cdp.send("Network.setBlockedURLs", { urls: opts.blockUrls }, sessionId);
+  }
+  if (os) await presentOs(cdp, sessionId, os);
+  if (navigate && opts.startUrl) await cdp.send("Page.navigate", { url: opts.startUrl }, sessionId);
+}
+
+/**
+ * A session in an already-running browser (./remote.ts): a fresh tab of its own, readied like a local one. The
+ * browser's launch flags own the proxy, languages and window; a native persona (a stealth build) gets no UA override.
+ * The site's first page is a Page.navigate from about:blank: the same first request as a local Chrome with a persona.
+ */
+async function launchRemote(opts: CleanLaunchOptions, remote: RemoteBrowser): Promise<BrowserSession> {
+  const cleanup: (() => Promise<void> | void)[] = [];
+  try {
+    const cdp = await RawCdp.connect(await browserWsUrl(remote.cdpUrl));
+    cleanup.push(() => cdp.close());
+    const tab = await openRemoteTab(cdp, remote.cdpUrl);
+    cleanup.push(tab.release);
+    const { sessionId } = await cdp.send<{ sessionId: string }>("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
+    await prepareTab(cdp, sessionId, opts, remote.nativePersona ? undefined : opts.os, true);
+    return new CleanSession(cdp, sessionId, opts, cleanup, true);
+  } catch (err) {
+    for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(() => undefined);
+    throw err;
+  }
 }
 
 class CleanSession implements BrowserSession {
@@ -194,6 +222,8 @@ class CleanSession implements BrowserSession {
     private readonly sessionId: string,
     private readonly opts: CleanLaunchOptions,
     private readonly cleanup: (() => Promise<void> | void)[],
+    /** Attached to a running browser (./remote.ts): close() leaves the browser alone. */
+    private readonly remote: boolean,
   ) {}
 
   private send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -348,11 +378,18 @@ class CleanSession implements BrowserSession {
   }
 
   memoryMB(): Promise<number> {
-    return chromiumTreeRssMB(this.opts.userDataDir);
+    // A remote browser's processes are on another machine.
+    return this.remote ? Promise.resolve(0) : chromiumTreeRssMB(this.opts.userDataDir);
   }
 
   close(): Promise<void> {
     this.closing ??= (async () => {
+      if (this.remote) {
+        // Only the connection goes. The tab stays (closing a headful browser's last tab ends the browser) until the
+        // next session of this browser replaces it; the profile keeps its cookies.
+        for (const fn of this.cleanup.reverse()) await Promise.resolve(fn()).catch(() => undefined);
+        return;
+      }
       try {
         await Promise.race([this.cdp.send("Browser.close"), sleep(5_000)]);
       } catch {

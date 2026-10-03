@@ -7,6 +7,14 @@ export interface ProxyConfig {
 }
 /** An OS the clean engine can present: what a person's desktop Chrome most likely runs on. */
 export type PersonaOs = "windows" | "mac";
+/** An already-running browser to drive over its DevTools port instead of starting one (clean engine). */
+export interface RemoteBrowser {
+    /** "http://host:9222" (resolved through /json/version) or the browser's own "ws://…/devtools/browser/…" url. */
+    cdpUrl: string;
+    /** The browser presents its own OS, user agent and client hints (a stealth build): webtap sends no user-agent
+     * override, whatever the identity's `os`. */
+    nativePersona?: boolean;
+}
 export interface BrowserOptions {
     /** Chrome / Chromium binary. Omitted: the usual install locations (findChrome()), then Stagehand's own lookup. */
     executablePath?: string;
@@ -20,6 +28,9 @@ export interface BrowserOptions {
     userAgent?: string;
     /** Clean engine: present this OS (UA, client hints, navigator.platform) instead of the real one. See Identity.os. */
     os?: PersonaOs;
+    /** Clean engine: attach to this running browser instead of starting Chrome. Its own launch flags then decide the
+     * proxy, languages, window and headless mode: executablePath, proxy, languages, viewport and headless are unused. */
+    remote?: RemoteBrowser;
     /** Where snapshot() writes its html/png/url bundles. */
     snapshotDir: string;
     /** Action cache shared by every session of a runtime. Omitted: a memory-only cache for this session. */
