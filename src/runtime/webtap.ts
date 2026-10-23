@@ -20,6 +20,7 @@ import { Breaker, Stats, type BreakerOptions, type CanaryResult, type EndpointHe
 import { IdentityPool, type IdentitySiteStatus } from "./identity.js";
 import { StrategyFailure, changed, type Outcome } from "./outcome.js";
 import type { Endpoint, HttpRequest, HttpResponse, Identity, SiteDef, StrategyContext } from "./site.js";
+import { siteCookies, type SessionBundle } from "../session/key.js";
 import { browserHeaders } from "./fingerprint.js";
 import { encodeBody } from "./strategies.js";
 
@@ -113,6 +114,13 @@ export interface Webtap {
   health(): HealthReport;
   /** Runs every endpoint's canary (or only `site`'s). perStrategy: test each strategy alone instead of the fallback chain. */
   runCanaries(opts?: { site?: string; perStrategy?: boolean }): Promise<Record<string, CanaryResult>>;
+  /**
+   * Opens the site in a visible browser on `identity`'s profile, runs `whileOpen` (a person signs in; resolve when they
+   * are done), then returns the site's cookies as a bundle. Seal it with encodeSessionKey to ship it to a server.
+   */
+  exportSession(site: string, opts: { identity?: string; whileOpen: (session: BrowserSession) => Promise<void> }): Promise<SessionBundle>;
+  /** Loads a bundle's cookies into `identity`'s profile for the site: the next calls are signed in. */
+  importSession(site: string, bundle: SessionBundle, opts?: { identity?: string }): Promise<{ cookies: number }>;
   /** Opens the sessions of keepWarm sites now (their primary identity) and starts their keep-alive visits. */
   warm(): Promise<void>;
   close(): Promise<void>;
@@ -378,8 +386,46 @@ export function createWebtap(opts: WebtapOptions): Webtap {
     }
   }
 
+  // ── Login sessions ──
+  async function withSession<T>(siteId: string, identityId: string | undefined, visible: boolean, fn: (s: BrowserSession, site: SiteDef, identity: Identity) => Promise<T>): Promise<T> {
+    const site = sites.get(siteId);
+    if (!site) throw new WebtapError("unknown_site", `unknown site: ${siteId}`);
+    const identity = identityId ? identities.identities.find((i) => i.id === identityId) : primaryIdentity(site);
+    if (!identity) throw new WebtapError("failed", identityId ? `unknown identity: ${identityId}` : `${siteId}: no identity may use this site`);
+    // A person signs in, so the window must exist: the clean engine already shows it; a headless recipe is shown for this lease.
+    const leased: SiteDef = visible ? { ...site, browser: { ...site.browser, headless: false } } : site;
+    const lease = await pool.lease(identity, leased);
+    let broken = false;
+    try {
+      return await fn(lease.session, site, identity);
+    } catch (err) {
+      broken = BROWSER_BROKEN.test(errMessage(err));
+      throw err;
+    } finally {
+      await lease.release(broken).catch(() => undefined);
+    }
+  }
+
   return {
     call,
+
+    exportSession: (siteId, o) =>
+      withSession(siteId, o.identity, true, async (session, site, identity) => {
+        await o.whileOpen(session);
+        const cookies = siteCookies(await session.cookies(), site.origin, site.session?.domains);
+        if (!cookies.length) throw new WebtapError("failed", `${siteId}: the browser holds no cookies for ${site.origin}: nothing to export`);
+        return { v: 1, site: site.id, identity: identity.id, createdAt: new Date().toISOString(), cookies };
+      }),
+
+    importSession: async (siteId, bundle, o = {}) => {
+      if (!sites.has(siteId)) throw new WebtapError("unknown_site", `unknown site: ${siteId}`);
+      if (bundle.site !== siteId) throw new WebtapError("bad_input", `this session is for ${bundle.site}, not ${siteId}`);
+      return withSession(siteId, o.identity, false, async (session, site) => {
+        const cookies = siteCookies(bundle.cookies, site.origin, site.session?.domains);
+        await session.setCookies(cookies);
+        return { cookies: cookies.length };
+      });
+    },
 
     describe() {
       const out: EndpointInfo[] = [];

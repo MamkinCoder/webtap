@@ -12,6 +12,8 @@ export { StrategyFailure, banned, changed, transient, classifyResponse, looksLik
 export type { Outcome } from "./runtime/outcome.js";
 export type { CanaryResult, EndpointHealth, EndpointStatus, StrategyStats } from "./runtime/health.js";
 export type { IdentitySiteStatus } from "./runtime/identity.js";
+export { decodeSessionKey, describeSession, encodeSessionKey, siteCookies } from "./session/key.js";
+export type { SessionBundle } from "./session/key.js";
 export { createServer } from "./server.js";
 export type { ServerOptions } from "./server.js";
 

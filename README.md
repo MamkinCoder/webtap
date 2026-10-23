@@ -142,6 +142,33 @@ Working examples, recorded from the sites' own frontends: [`examples/sites/wildb
 (page-fetch through WB's anti-bot check, LLM browser fallback) and
 [`examples/sites/yandex-eda.ts`](examples/sites/yandex-eda.ts) (HTTP with a page-fetch fallback).
 
+## Sessions: log in once, ship the key
+
+Sites behind a login (a messenger, an account) need a signed-in browser, and signing in takes a person. webtap splits that
+from running: sign in once on a machine with a screen, turn the browser's cookies into a **session key**, and import the key
+wherever the calls run: a server, a container, a CI job. The key is one string, so how it travels is up to you (an env var,
+a secret manager, a pasted line); it is an API key for "this account, signed in".
+
+```bash
+export WEBTAP_SESSION_SECRET=…        # seals the key (AES-256-GCM); cookies are credentials, there is no unsealed form
+npx webtap login sites/avito.ts --site avito --out avito.key
+#   a browser opens on the site's origin: sign in (password, SMS, captcha: yours), return and press Enter
+
+# on the server (same secret, key from a file or WEBTAP_SESSION_KEY):
+npx webtap session import sites/avito.ts --site avito --key-file avito.key
+npx webtap session info --key-file avito.key     # site, cookie count, domains, soonest expiry — never the values
+```
+
+From code: `webtap.exportSession(site, { whileOpen })` returns a `SessionBundle` (seal it with `encodeSessionKey`),
+`webtap.importSession(site, bundle)` loads one into the identity's profile, and a server created with
+`createServer(webtap, { sessionSecret })` takes `PUT /sessions/:site` with `{"key": "wts1.…"}`, so a running service can be
+re-signed-in without a restart.
+
+Only the site's own cookies are exported (its origin's parent domain; `session: { domains: ["avito.ru"] }` on the site
+overrides that). Limits: a site may tie a session to the IP or browser fingerprint it was created on and drop it elsewhere
+(`bundle.identity` records where it was made); session cookies without an expiry die with the browser they were imported
+into; and when the login lapses, run `webtap login` again.
+
 ## Mapping a new site
 
 `webtap map` writes a site file for you. An LLM drives the site in Chrome until it shows the results, every response
