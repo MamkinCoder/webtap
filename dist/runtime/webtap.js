@@ -19,6 +19,7 @@ import { BrowserPool } from "./browser-pool.js";
 import { Breaker, Stats } from "./health.js";
 import { IdentityPool } from "./identity.js";
 import { StrategyFailure, changed } from "./outcome.js";
+import { siteCookies } from "../session/key.js";
 import { browserHeaders } from "./fingerprint.js";
 import { encodeBody } from "./strategies.js";
 export class WebtapError extends Error {
@@ -303,8 +304,49 @@ export function createWebtap(opts) {
             await lease?.release(broken).catch(() => undefined);
         }
     }
+    // ── Login sessions ──
+    async function withSession(siteId, identityId, visible, fn) {
+        const site = sites.get(siteId);
+        if (!site)
+            throw new WebtapError("unknown_site", `unknown site: ${siteId}`);
+        const identity = identityId ? identities.identities.find((i) => i.id === identityId) : primaryIdentity(site);
+        if (!identity)
+            throw new WebtapError("failed", identityId ? `unknown identity: ${identityId}` : `${siteId}: no identity may use this site`);
+        // A person signs in, so the window must exist: the clean engine already shows it; a headless recipe is shown for this lease.
+        const leased = visible ? { ...site, browser: { ...site.browser, headless: false } } : site;
+        const lease = await pool.lease(identity, leased);
+        let broken = false;
+        try {
+            return await fn(lease.session, site, identity);
+        }
+        catch (err) {
+            broken = BROWSER_BROKEN.test(errMessage(err));
+            throw err;
+        }
+        finally {
+            await lease.release(broken).catch(() => undefined);
+        }
+    }
     return {
         call,
+        exportSession: (siteId, o) => withSession(siteId, o.identity, true, async (session, site, identity) => {
+            await o.whileOpen(session);
+            const cookies = siteCookies(await session.cookies(), site.origin, site.session?.domains);
+            if (!cookies.length)
+                throw new WebtapError("failed", `${siteId}: the browser holds no cookies for ${site.origin}: nothing to export`);
+            return { v: 1, site: site.id, identity: identity.id, createdAt: new Date().toISOString(), cookies };
+        }),
+        importSession: async (siteId, bundle, o = {}) => {
+            if (!sites.has(siteId))
+                throw new WebtapError("unknown_site", `unknown site: ${siteId}`);
+            if (bundle.site !== siteId)
+                throw new WebtapError("bad_input", `this session is for ${bundle.site}, not ${siteId}`);
+            return withSession(siteId, o.identity, false, async (session, site) => {
+                const cookies = siteCookies(bundle.cookies, site.origin, site.session?.domains);
+                await session.setCookies(cookies);
+                return { cookies: cookies.length };
+            });
+        },
         describe() {
             const out = [];
             for (const site of sites.values()) {

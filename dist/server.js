@@ -3,9 +3,12 @@
 //   GET  /sites                   endpoint catalog with JSON Schemas
 //   GET  /health                  per endpoint / strategy / identity health
 //   POST /canaries[?site=x&perStrategy=1]
+//   PUT  /sessions/:site          body {"key":"wts1.…"} → 200 { site, cookies }: sign the site in from a session key
+//                                 (only when the server has a sessionSecret; the key is opened with it)
 import { createServer as createHttpServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { WebtapError } from "./runtime/webtap.js";
+import { decodeSessionKey } from "./session/key.js";
 export function createServer(webtap, opts = {}) {
     return createHttpServer((req, res) => {
         handle(webtap, opts, req, res).catch((err) => send(res, 500, { error: err instanceof Error ? err.message : String(err) }));
@@ -23,6 +26,21 @@ async function handle(webtap, opts, req, res) {
     if (req.method === "POST" && url.pathname === "/canaries") {
         const site = url.searchParams.get("site");
         return send(res, 200, await webtap.runCanaries({ ...(site ? { site } : {}), perStrategy: url.searchParams.get("perStrategy") === "1" }));
+    }
+    if (req.method === "PUT" && parts.length === 2 && parts[0] === "sessions" && opts.sessionSecret) {
+        try {
+            const { key } = JSON.parse(await readBody(req, opts.maxBodyBytes ?? 1_000_000));
+            if (typeof key !== "string")
+                throw new Error('body must be {"key": "wts1.…"}');
+            const bundle = decodeSessionKey(key, opts.sessionSecret);
+            const { cookies } = await webtap.importSession(parts[1], bundle);
+            return send(res, 200, { site: bundle.site, cookies });
+        }
+        catch (err) {
+            if (err instanceof WebtapError)
+                return send(res, err.code === "failed" ? 502 : err.code === "bad_input" ? 400 : 404, { error: err.message, code: err.code });
+            return send(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
     }
     if (req.method === "POST" && parts.length === 3 && parts[0] === "sites") {
         let input;

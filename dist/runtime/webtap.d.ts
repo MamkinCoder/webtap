@@ -1,8 +1,9 @@
-import { type BrowserLauncher, type WebtapLLM } from "../types.js";
+import { type BrowserLauncher, type BrowserSession, type WebtapLLM } from "../types.js";
 import { type BreakerOptions, type CanaryResult, type EndpointHealth } from "./health.js";
 import { type IdentitySiteStatus } from "./identity.js";
 import { type Outcome } from "./outcome.js";
 import type { Identity, SiteDef } from "./site.js";
+import { type SessionBundle } from "../session/key.js";
 export interface WebtapOptions {
     sites: SiteDef[];
     /** Default: one identity, this machine's own IP. */
@@ -98,6 +99,20 @@ export interface Webtap {
         site?: string;
         perStrategy?: boolean;
     }): Promise<Record<string, CanaryResult>>;
+    /**
+     * Opens the site in a visible browser on `identity`'s profile, runs `whileOpen` (a person signs in; resolve when they
+     * are done), then returns the site's cookies as a bundle. Seal it with encodeSessionKey to ship it to a server.
+     */
+    exportSession(site: string, opts: {
+        identity?: string;
+        whileOpen: (session: BrowserSession) => Promise<void>;
+    }): Promise<SessionBundle>;
+    /** Loads a bundle's cookies into `identity`'s profile for the site: the next calls are signed in. */
+    importSession(site: string, bundle: SessionBundle, opts?: {
+        identity?: string;
+    }): Promise<{
+        cookies: number;
+    }>;
     /** Opens the sessions of keepWarm sites now (their primary identity) and starts their keep-alive visits. */
     warm(): Promise<void>;
     close(): Promise<void>;

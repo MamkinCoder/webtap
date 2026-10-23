@@ -83,6 +83,11 @@ export interface SiteDef {
     requireProxy?: boolean;
     /** First quarantine of an identity after a ban; doubles on repeats (max 6 h). Default 10 min. */
     banCooldownMs?: number;
+    /** Login sessions (webtap login / exportSession / importSession). */
+    session?: {
+        /** Cookie domains that make up this site's login, e.g. ["avito.ru"]. Default: the origin's parent domain. */
+        domains?: string[];
+    };
     /** Browser settings for this site's sessions. */
     browser?: {
         /** "stagehand" (default): act/extract/observe with an LLM. "clean": a plain Chrome driven without in-page

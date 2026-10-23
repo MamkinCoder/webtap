@@ -6,6 +6,7 @@ export { createWebtap, defaultCanaryCheck, WebtapError } from "./runtime/webtap.
 export { defineSite, endpoint } from "./runtime/site.js";
 export { browser, http, pageFetch, requests } from "./runtime/strategies.js";
 export { StrategyFailure, banned, changed, transient, classifyResponse, looksLikeChallenge, parseJsonBody } from "./runtime/outcome.js";
+export { decodeSessionKey, describeSession, encodeSessionKey, siteCookies } from "./session/key.js";
 export { createServer } from "./server.js";
 // Browser layer, usable on its own.
 export { createLauncher, desktopUserAgent, findChrome } from "./browser/launcher.js";
